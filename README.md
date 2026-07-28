@@ -35,5 +35,9 @@ Para que el programa funcione correctamente, requiere las siguientes dependencia
    ```bash
    git clone [https://github.com/tu-usuario/tu-repositorio.git](https://github.com/tu-usuario/tu-repositorio.git)
    cd GestorTransferencias
+2. **Descargar las librerias de Python:**
+   ```bash 
    pip install pandas pillow pytesseract pdf2image openpyxl fuzzywuzzy python-Levenshtein
-   python GestorTransferencias.py
+3. **Ejecutar el Programa:**
+   ```bash
+    python GestorTransferencias.py
