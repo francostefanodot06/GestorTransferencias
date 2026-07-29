@@ -9,7 +9,7 @@ import pytesseract
 from fuzzywuzzy import process
 from pdf2image import convert_from_path
 
-# Configurar el directorio de Tesseract (ajusta la ruta según tu PC)
+# Configurar Tesseract (ajusta la ruta según tu sistema)
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 class ComprobanteConciliacionApp(tk.Tk):
@@ -43,13 +43,16 @@ class ComprobanteConciliacionApp(tk.Tk):
             messagebox.showwarning("Advertencia", "No se encontraron archivos bancarios o comprobantes en la carpeta.")
             return
 
-        df_bank = self.read_bank_file(bank_file)
-        processed_data = self.process_invoices(invoices, df_bank)
+        try:
+            df_bank = self.read_bank_file(bank_file)
+            processed_data = self.process_invoices(invoices, df_bank)
 
-        for cobrador, data in processed_data.items():
-            self.save_conciliacion(data, cobrador, bank_file)
+            for cobrador, data in processed_data.items():
+                self.save_conciliacion(data, cobrador, bank_file)
 
-        messagebox.showinfo("Proceso Completado", "El proceso de conciliación ha finalizado con éxito.")
+            messagebox.showinfo("Proceso Completado", "El proceso de conciliación ha finalizado con éxito.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Ocurrió un error durante el proceso:\n{e}")
 
     def find_files(self, folder_path):
         bank_file = None
@@ -57,15 +60,15 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         for root, _, files in os.walk(folder_path):
             for file in files:
-                if file.lower().endswith(('.csv', '.xlsx')):
-                    if not bank_file:
-                        bank_file = os.path.join(root, file)
-                elif file.lower().endswith(('.png', '.jpg', '.jpeg', '.pdf')):
+                file_lower = file.lower()
+                if file_lower.endswith(('.csv', '.xlsx', '.txt')) and not bank_file:
+                    bank_file = os.path.join(root, file)
+                elif file_lower.endswith(('.png', '.jpg', '.jpeg', '.pdf')):
                     invoices.append(os.path.join(root, file))
 
         return bank_file, invoices
 
-def read_bank_file(self, bank_file):
+    def read_bank_file(self, bank_file):
         if bank_file.endswith('.csv'):
             try:
                 df = pd.read_csv(bank_file, encoding='latin1', on_bad_lines='skip')
@@ -74,10 +77,9 @@ def read_bank_file(self, bank_file):
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
-        # Normalizar nombres de columnas (quitar espacios y pasar a minúsculas para buscar fácil)
+        # Normalizar nombres de columnas
         df.columns = df.columns.astype(str).str.strip()
         
-        # Diccionario de búsqueda flexible para adaptarnos al CSV real de tu banco
         col_mapping = {}
         for col in df.columns:
             col_lower = col.lower()
@@ -88,14 +90,11 @@ def read_bank_file(self, bank_file):
             elif 'leyenda' in col_lower or 'descripcion' in col_lower or 'detalle' in col_lower or 'concepto' in col_lower:
                 col_mapping['Leyenda Adicional1'] = col
 
-        # Verificar si encontramos las tres columnas esenciales
         missing = [k for k in ['Fecha', 'Creditos', 'Leyenda Adicional1'] if k not in col_mapping]
         if missing:
-            raise ValueError(f"No se pudieron identificar automáticamente las columnas: {missing}. Columnas encontradas en el archivo: {list(df.columns)}")
+            raise ValueError(f"No se pudieron identificar automáticamente las columnas: {missing}. Columnas encontradas: {list(df.columns)}")
 
-        # Renombrar las columnas del DataFrame original a los nombres estándar que usa el script
         df = df.rename(columns={v: k for k, v in col_mapping.items()})
-        
         relevant_columns = ['Fecha', 'Creditos', 'Leyenda Adicional1']
         return df[relevant_columns]
 
@@ -106,7 +105,7 @@ def read_bank_file(self, bank_file):
             text = self.extract_text(invoice)
             cobrador_match = process.extractOne(text, df_bank['Leyenda Adicional1'].dropna())
             
-            if cobrador_match and cobrador_match[1] >= 70:  # Umbral de confianza
+            if cobrador_match and cobrador_match[1] >= 70:
                 cobrador_name = cobrador_match[0]
                 matching_rows = df_bank[df_bank['Leyenda Adicional1'] == cobrador_name]
 
@@ -125,7 +124,6 @@ def read_bank_file(self, bank_file):
         extracted_text = ""
         try:
             if file_path.lower().endswith('.pdf'):
-                # Ajusta la ruta de poppler según tu sistema si es necesario
                 pages = convert_from_path(file_path, poppler_path=r'C:\Program Files\poppler-23.07.0\Library\bin')
                 for page in pages:
                     extracted_text += pytesseract.image_to_string(page, lang='spa')
@@ -138,27 +136,45 @@ def read_bank_file(self, bank_file):
         return re.sub(r'\s+', ' ', extracted_text.strip())
 
     def save_conciliacion(self, data, cobrador, bank_file):
-        # Crear nombre de carpeta limpio con la fecha de la carpeta raíz y el nombre del cobrador
         folder_name = f"Rendicion_{os.path.basename(self.folder_path)}_{cobrador}"
         output_folder = os.path.join(self.folder_path, folder_name)
 
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
-        # Copiar comprobantes procesados a la nueva carpeta
         for invoice in data['invoices']:
             src_file = invoice['file_path']
             dst_file = os.path.join(output_folder, os.path.basename(src_file))
             shutil.copy2(src_file, dst_file)
 
-        # Actualizar el archivo bancario original (quitando las usadas, dejando las pendientes)
         if bank_file:
-            df_bank = pd.read_csv(bank_file, encoding='latin1') if bank_file.endswith('.csv') else pd.read_excel(bank_file)
+            if bank_file.endswith('.csv'):
+                df_bank = pd.read_csv(bank_file, encoding='latin1', on_bad_lines='skip')
+            else:
+                df_bank = pd.read_excel(bank_file)
+
+            # Normalizar nombres temporalmente para borrar las filas usadas
+            original_cols = df_bank.columns
+            df_bank.columns = df_bank.columns.astype(str).str.strip()
             
-            for credit in data['bank']:
-                index = df_bank[(df_bank['Creditos'] == credit) & (df_bank['Leyenda Adicional1'] == cobrador)].index
-                if not index.empty:
-                    df_bank.drop(index, inplace=True)
+            # Identificar columna de créditos en el archivo original
+            cred_col_real = None
+            ley_col_real = None
+            for col in df_bank.columns:
+                c_low = col.lower()
+                if 'credito' in c_low or 'monto' in c_low or 'haber' in c_low:
+                    cred_col_real = col
+                if 'leyenda' in c_low or 'descripcion' in c_low or 'detalle' in c_low or 'concepto' in c_low:
+                    ley_col_real = col
+
+            if cred_col_real and ley_col_real:
+                for credit in data['bank']:
+                    index = df_bank[(df_bank[cred_col_real] == credit) & (df_bank[ley_col_real] == cobrador)].index
+                    if not index.empty:
+                        df_bank.drop(index, inplace=True)
+
+            # Restaurar nombres originales de columnas antes de guardar
+            df_bank.columns = original_cols
 
             if bank_file.endswith('.csv'):
                 df_bank.to_csv(bank_file, index=False, encoding='latin1')
