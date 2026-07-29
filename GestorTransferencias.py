@@ -84,11 +84,14 @@ class ComprobanteConciliacionApp(tk.Tk):
         col_mapping = {}
         for col in df.columns:
             col_lower = col.lower()
-            if 'fecha' in col_lower:
+            # Quitamos tildes para comparar sin miedo
+            col_clean = col_lower.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+            
+            if 'fecha' in col_clean:
                 col_mapping['Fecha'] = col
-            elif 'credito' in col_lower or 'monto' in col_lower or 'haber' in col_lower:
+            elif 'credito' in col_clean or 'monto' in col_clean or 'haber' in col_clean:
                 col_mapping['Creditos'] = col
-            elif 'leyenda' in col_lower or 'descripcion' in col_lower or 'detalle' in col_lower or 'concepto' in col_lower:
+            elif 'leyenda' in col_clean or 'descripcion' in col_clean or 'detalle' in col_clean or 'concepto' in col_clean:
                 col_mapping['Leyenda Adicional1'] = col
 
         missing = [k for k in ['Fecha', 'Creditos', 'Leyenda Adicional1'] if k not in col_mapping]
