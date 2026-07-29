@@ -65,7 +65,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         return bank_file, invoices
 
-    def read_bank_file(self, bank_file):
+def read_bank_file(self, bank_file):
         if bank_file.endswith('.csv'):
             try:
                 df = pd.read_csv(bank_file, encoding='latin1', on_bad_lines='skip')
@@ -74,6 +74,28 @@ class ComprobanteConciliacionApp(tk.Tk):
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
+        # Normalizar nombres de columnas (quitar espacios y pasar a minúsculas para buscar fácil)
+        df.columns = df.columns.astype(str).str.strip()
+        
+        # Diccionario de búsqueda flexible para adaptarnos al CSV real de tu banco
+        col_mapping = {}
+        for col in df.columns:
+            col_lower = col.lower()
+            if 'fecha' in col_lower:
+                col_mapping['Fecha'] = col
+            elif 'credito' in col_lower or 'monto' in col_lower or 'haber' in col_lower:
+                col_mapping['Creditos'] = col
+            elif 'leyenda' in col_lower or 'descripcion' in col_lower or 'detalle' in col_lower or 'concepto' in col_lower:
+                col_mapping['Leyenda Adicional1'] = col
+
+        # Verificar si encontramos las tres columnas esenciales
+        missing = [k for k in ['Fecha', 'Creditos', 'Leyenda Adicional1'] if k not in col_mapping]
+        if missing:
+            raise ValueError(f"No se pudieron identificar automáticamente las columnas: {missing}. Columnas encontradas en el archivo: {list(df.columns)}")
+
+        # Renombrar las columnas del DataFrame original a los nombres estándar que usa el script
+        df = df.rename(columns={v: k for k, v in col_mapping.items()})
+        
         relevant_columns = ['Fecha', 'Creditos', 'Leyenda Adicional1']
         return df[relevant_columns]
 
