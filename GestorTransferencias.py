@@ -106,7 +106,9 @@ class ComprobanteConciliacionApp(tk.Tk):
             
             if cobrador_match and cobrador_match[1] >= 70:
                 cobrador_name = cobrador_match[0]
-                matching_rows = df_bank[df_bank['Leyenda Adicional1'] == cobrador_name]
+                
+                # Búsqueda segura usando .loc para evitar cualquier problema de índices desalineados
+                matching_rows = df_bank.loc[df_bank['Leyenda Adicional1'] == cobrador_name]
 
                 if not matching_rows.empty:
                     credit_amount = matching_rows['Creditos'].values[0]
