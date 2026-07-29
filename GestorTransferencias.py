@@ -70,7 +70,6 @@ class ComprobanteConciliacionApp(tk.Tk):
 
     def read_bank_file(self, bank_file):
         if bank_file.endswith('.csv'):
-            # Forzamos separador por punto y coma y codificación UTF-8 con BOM
             try:
                 df = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
             except Exception:
@@ -78,20 +77,16 @@ class ComprobanteConciliacionApp(tk.Tk):
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
-        # Limpiar nombres de columnas eliminando caracteres extraños
         df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
         
         col_mapping = {}
         for col in df.columns:
-            col_lower = col.lower()
-            # Quitamos tildes para comparar sin miedo
-            col_clean = col_lower.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
-            
-            if 'fecha' in col_clean:
+            col_lower = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+            if 'fecha' in col_lower:
                 col_mapping['Fecha'] = col
-            elif 'credito' in col_clean or 'monto' in col_clean or 'haber' in col_clean:
+            elif 'credito' in col_lower or 'monto' in col_lower or 'haber' in col_lower:
                 col_mapping['Creditos'] = col
-            elif 'leyenda' in col_clean or 'descripcion' in col_clean or 'detalle' in col_clean or 'concepto' in col_clean:
+            elif 'leyenda' in col_lower or 'descripcion' in col_lower or 'detalle' in col_lower or 'concepto' in col_lower:
                 col_mapping['Leyenda Adicional1'] = col
 
         missing = [k for k in ['Fecha', 'Creditos', 'Leyenda Adicional1'] if k not in col_mapping]
@@ -130,10 +125,10 @@ class ComprobanteConciliacionApp(tk.Tk):
             if file_path.lower().endswith('.pdf'):
                 pages = convert_from_path(file_path, poppler_path=r'C:\Program Files\poppler-23.07.0\Library\bin')
                 for page in pages:
-                    extracted_text += pytesseract.image_to_string(page, lang='spa')
+                    extracted_text += pytesseract.image_to_string(page)
             else:
                 image = Image.open(file_path).convert('RGB')
-                extracted_text = pytesseract.image_to_string(image, lang='spa')
+                extracted_text = pytesseract.image_to_string(image)
         except Exception as e:
             print(f"Error al extraer texto de {file_path}: {e}")
 
@@ -171,9 +166,9 @@ class ComprobanteConciliacionApp(tk.Tk):
 
             if cred_col_real and ley_col_real:
                 for credit in data['bank']:
-                    # Usamos .loc para buscar de forma segura y evitar conflictos de alineación de índices
+                    # Eliminación limpia por índice booleano directo para evitar cualquier error de alineación
                     mask = (df_bank[cred_col_real] == credit) & (df_bank[ley_col_real] == cobrador)
-                    df_bank = df_bank[~mask]
+                    df_bank = df_bank.loc[~mask]
 
             df_bank.columns = original_cols
 
