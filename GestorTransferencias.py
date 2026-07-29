@@ -70,8 +70,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
     def read_bank_file(self, bank_file):
         if bank_file.endswith('.csv'):
-            # Usamos utf-8-sig para que limpie automáticamente los caracteres raros del inicio (ï¿...)
-            # y sep=';' porque el banco separa las columnas con punto y coma.
+            # Forzamos separador por punto y coma y codificación UTF-8 con BOM
             try:
                 df = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
             except Exception:
@@ -79,26 +78,8 @@ class ComprobanteConciliacionApp(tk.Tk):
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
-        # Normalizar nombres de columnas (quitar espacios, comillas o caracteres sobrantes)
+        # Limpiar nombres de columnas eliminando caracteres extraños
         df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
-        
-        col_mapping = {}
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'fecha' in col_lower:
-                col_mapping['Fecha'] = col
-            elif 'credito' in col_lower or 'monto' in col_lower or 'haber' in col_lower:
-                col_mapping['Creditos'] = col
-            elif 'leyenda' in col_lower or 'descripcion' in col_lower or 'detalle' in col_lower or 'concepto' in col_lower:
-                col_mapping['Leyenda Adicional1'] = col
-
-        missing = [k for k in ['Fecha', 'Creditos', 'Leyenda Adicional1'] if k not in col_mapping]
-        if missing:
-            raise ValueError(f"No se pudieron identificar automáticamente las columnas: {missing}. Columnas encontradas en tu archivo: {list(df.columns)}")
-
-        df = df.rename(columns={v: k for k, v in col_mapping.items()})
-        relevant_columns = ['Fecha', 'Creditos', 'Leyenda Adicional1']
-        return df[relevant_columns]
         
         col_mapping = {}
         for col in df.columns:
@@ -169,15 +150,13 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         if bank_file:
             if bank_file.endswith('.csv'):
-                df_bank = pd.read_csv(bank_file, encoding='latin1', on_bad_lines='skip')
+                df_bank = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
             else:
                 df_bank = pd.read_excel(bank_file)
 
-            # Normalizar nombres temporalmente para borrar las filas usadas
             original_cols = df_bank.columns
-            df_bank.columns = df_bank.columns.astype(str).str.strip()
+            df_bank.columns = df_bank.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
             
-            # Identificar columna de créditos en el archivo original
             cred_col_real = None
             ley_col_real = None
             for col in df_bank.columns:
@@ -193,15 +172,13 @@ class ComprobanteConciliacionApp(tk.Tk):
                     if not index.empty:
                         df_bank.drop(index, inplace=True)
 
-            # Restaurar nombres originales de columnas antes de guardar
             df_bank.columns = original_cols
 
             if bank_file.endswith('.csv'):
-                df_bank.to_csv(bank_file, index=False, encoding='latin1')
+                df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
             else:
                 df_bank.to_excel(bank_file, index=False)
 
 if __name__ == "__main__":
     app = ComprobanteConciliacionApp()
     app.mainloop()
-    
