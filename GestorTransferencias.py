@@ -70,15 +70,35 @@ class ComprobanteConciliacionApp(tk.Tk):
 
     def read_bank_file(self, bank_file):
         if bank_file.endswith('.csv'):
+            # Usamos utf-8-sig para que limpie automáticamente los caracteres raros del inicio (ï¿...)
+            # y sep=';' porque el banco separa las columnas con punto y coma.
             try:
-                df = pd.read_csv(bank_file, encoding='latin1', on_bad_lines='skip')
+                df = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
             except Exception:
                 df = pd.read_csv(bank_file, encoding='latin1', sep=';', on_bad_lines='skip')
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
-        # Normalizar nombres de columnas
-        df.columns = df.columns.astype(str).str.strip()
+        # Normalizar nombres de columnas (quitar espacios, comillas o caracteres sobrantes)
+        df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
+        
+        col_mapping = {}
+        for col in df.columns:
+            col_lower = col.lower()
+            if 'fecha' in col_lower:
+                col_mapping['Fecha'] = col
+            elif 'credito' in col_lower or 'monto' in col_lower or 'haber' in col_lower:
+                col_mapping['Creditos'] = col
+            elif 'leyenda' in col_lower or 'descripcion' in col_lower or 'detalle' in col_lower or 'concepto' in col_lower:
+                col_mapping['Leyenda Adicional1'] = col
+
+        missing = [k for k in ['Fecha', 'Creditos', 'Leyenda Adicional1'] if k not in col_mapping]
+        if missing:
+            raise ValueError(f"No se pudieron identificar automáticamente las columnas: {missing}. Columnas encontradas en tu archivo: {list(df.columns)}")
+
+        df = df.rename(columns={v: k for k, v in col_mapping.items()})
+        relevant_columns = ['Fecha', 'Creditos', 'Leyenda Adicional1']
+        return df[relevant_columns]
         
         col_mapping = {}
         for col in df.columns:
