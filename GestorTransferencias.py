@@ -163,7 +163,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             cred_col_real = None
             ley_col_real = None
             for col in df_bank.columns:
-                c_low = col.lower()
+                c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
                 if 'credito' in c_low or 'monto' in c_low or 'haber' in c_low:
                     cred_col_real = col
                 if 'leyenda' in c_low or 'descripcion' in c_low or 'detalle' in c_low or 'concepto' in c_low:
@@ -171,9 +171,9 @@ class ComprobanteConciliacionApp(tk.Tk):
 
             if cred_col_real and ley_col_real:
                 for credit in data['bank']:
-                    index = df_bank[(df_bank[cred_col_real] == credit) & (df_bank[ley_col_real] == cobrador)].index
-                    if not index.empty:
-                        df_bank.drop(index, inplace=True)
+                    # Usamos .loc para buscar de forma segura y evitar conflictos de alineación de índices
+                    mask = (df_bank[cred_col_real] == credit) & (df_bank[ley_col_real] == cobrador)
+                    df_bank = df_bank[~mask]
 
             df_bank.columns = original_cols
 
