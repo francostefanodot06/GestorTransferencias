@@ -67,7 +67,10 @@ class ComprobanteConciliacionApp(tk.Tk):
 
     def read_bank_file(self, bank_file):
         if bank_file.endswith('.csv'):
-            df = pd.read_csv(bank_file, encoding='latin1')
+            try:
+                df = pd.read_csv(bank_file, encoding='latin1', on_bad_lines='skip')
+            except Exception:
+                df = pd.read_csv(bank_file, encoding='latin1', sep=';', on_bad_lines='skip')
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
