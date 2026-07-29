@@ -99,15 +99,16 @@ class ComprobanteConciliacionApp(tk.Tk):
 
     def process_invoices(self, invoices, df_bank):
         processed_data = {}
+        # Convertimos la columna a una lista plana de Python para que fuzzywuzzy no colisione con los índices de Pandas
+        cobradores_lista = df_bank['Leyenda Adicional1'].dropna().tolist()
 
         for invoice in invoices:
             text = self.extract_text(invoice)
-            cobrador_match = process.extractOne(text, df_bank['Leyenda Adicional1'].dropna())
+            cobrador_match = process.extractOne(text, cobradores_lista)
             
             if cobrador_match and cobrador_match[1] >= 70:
                 cobrador_name = cobrador_match[0]
                 
-                # Búsqueda segura usando .loc para evitar cualquier problema de índices desalineados
                 matching_rows = df_bank.loc[df_bank['Leyenda Adicional1'] == cobrador_name]
 
                 if not matching_rows.empty:
