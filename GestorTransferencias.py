@@ -99,8 +99,8 @@ class ComprobanteConciliacionApp(tk.Tk):
 
     def process_invoices(self, invoices, df_bank):
         processed_data = {}
-        # Convertimos la columna a una lista plana de Python para que fuzzywuzzy no colisione con los índices de Pandas
-        cobradores_lista = df_bank['Leyenda Adicional1'].dropna().tolist()
+        # CORREGIDO: Uso de list() nativo en lugar de .tolist() para evitar errores de tipo en Pandas
+        cobradores_lista = list(df_bank['Leyenda Adicional1'].dropna())
 
         for invoice in invoices:
             text = self.extract_text(invoice)
@@ -169,7 +169,6 @@ class ComprobanteConciliacionApp(tk.Tk):
 
             if cred_col_real and ley_col_real:
                 for credit in data['bank']:
-                    # Eliminación limpia por índice booleano directo para evitar cualquier error de alineación
                     mask = (df_bank[cred_col_real] == credit) & (df_bank[ley_col_real] == cobrador)
                     df_bank = df_bank.loc[~mask]
 
