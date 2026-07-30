@@ -44,53 +44,48 @@ class ComprobanteConciliacionApp(tk.Tk):
             return
 
         try:
-            # 1. Leer archivo del banco y mapear columnas de forma flexible
             df_bank, bank_cols, cred_col_real, ley_col_real = self.read_bank_file_full(bank_file)
             
-            # 2. Procesar comprobantes buscando al cliente en la leyenda del banco
             matched_records = []
-            matched_invoices = []
-
             cobradores_lista = list(df_bank[ley_col_real].dropna().astype(str))
+
+            print("\n--- LEYENDAS DISPONIBLES EN EL BANCO ---")
+            print(cobradores_lista[:10]) # Muestra las primeras 10 para verificar
 
             for invoice in invoices:
                 text = self.extract_text(invoice)
-                # Buscamos si alguna parte del texto del comprobante coincide con la leyenda del banco
-                match = process.extractOne(text, cobradores_lista)
+                print(f"\n[TEXTO EXTRAÍDO DE: {os.path.basename(invoice)}]")
+                print(text[:200]) # Muestra los primeros 200 caracteres para ver qué leyó
 
-                if match and match[1] >= 60:  # Umbral de coincidencia flexible para nombres de clientes
+                match = process.extractOne(text, cobradores_lista)
+                print(f"-> Mejor coincidencia encontrada: {match}")
+
+                if match and match[1] >= 40:  # Bajamos temporalmente a 40 para ver si cazamos algo
                     client_legend = match[0]
                     row_data = df_bank[df_bank[ley_col_real] == client_legend]
 
                     if not row_data.empty:
                         matched_records.append(row_data.iloc[0])
-                        matched_invoices.append(invoice)
 
             if not matched_records:
-                messagebox.showinfo("Sin coincidencias", "No se encontraron comprobantes que coincidan con los registros del banco.")
+                messagebox.showinfo("Sin coincidencias", "Revisá la terminal de comandos: ahí imprimí lo que leyó el OCR para ver por qué no coincide con el banco.")
                 return
 
             df_matched = pd.DataFrame(matched_records)
-
-            # 3. Calcular la autosuma de las transferencias
             total_autosuma = df_matched[cred_col_real].sum()
 
-            # 4. Guardar la nueva planilla con la autosuma y los datos
             output_excel_name = f"Planilla_Creada_{os.path.basename(self.folder_path)}.xlsx"
             output_excel_path = os.path.join(self.folder_path, output_excel_name)
 
             with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
                 df_matched.to_excel(writer, sheet_name='Conciliacion', index=False)
-                # Agregamos una fila con la autosuma al final o como resumen
                 summary_df = pd.DataFrame([[ 'TOTAL AUTOSUMA', total_autosuma ]], columns=[ley_col_real, cred_col_real])
                 summary_df.to_excel(writer, sheet_name='Resumen', index=False)
 
-            # 5. Modificar el archivo del banco original (eliminando las filas conciliadas para que cambie de tamaño/fecha)
             for client_legend in df_matched[ley_col_real]:
                 mask = (df_bank[ley_col_real] == client_legend)
                 df_bank = df_bank.loc[~mask]
 
-            # Devolvemos las columnas originales al dataframe del banco antes de guardarlo
             df_bank.columns = bank_cols
 
             if bank_file.endswith('.csv'):
@@ -98,7 +93,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             else:
                 df_bank.to_excel(bank_file, index=False)
 
-            messagebox.showinfo("Proceso Completado", f"¡Proceso exitoso!\nSe creó la planilla: {output_excel_name}\nSe modificó el archivo del banco original restando los registros.")
+            messagebox.showinfo("Proceso Completado", f"¡Proceso exitoso!\nSe creó la planilla: {output_excel_name}")
 
         except Exception as e:
             messagebox.showerror("Error", f"Ocurrió un error durante el proceso:\n{e}")
@@ -139,7 +134,7 @@ class ComprobanteConciliacionApp(tk.Tk):
                 ley_col_real = col
 
         if not cred_col_real or not ley_col_real:
-            raise ValueError(f"No se pudieron identificar las columnas de montos o leyendas. Columnas encontradas: {list(df.columns)}")
+            raise ValueError(f"No se pudieron identificar las columnas. Columnas encontradas: {list(df.columns)}")
 
         return df, original_cols, cred_col_real, ley_col_real
 
