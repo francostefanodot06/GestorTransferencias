@@ -44,13 +44,62 @@ class ComprobanteConciliacionApp(tk.Tk):
             return
 
         try:
-            df_bank = self.read_bank_file(bank_file)
-            processed_data = self.process_invoices(invoices, df_bank)
+            # 1. Leer archivo del banco y mapear columnas de forma flexible
+            df_bank, bank_cols, cred_col_real, ley_col_real = self.read_bank_file_full(bank_file)
+            
+            # 2. Procesar comprobantes buscando al cliente en la leyenda del banco
+            matched_records = []
+            matched_invoices = []
 
-            for cobrador, data in processed_data.items():
-                self.save_conciliacion(data, cobrador, bank_file)
+            cobradores_lista = list(df_bank[ley_col_real].dropna().astype(str))
 
-            messagebox.showinfo("Proceso Completado", "El proceso de conciliación ha finalizado con éxito.")
+            for invoice in invoices:
+                text = self.extract_text(invoice)
+                # Buscamos si alguna parte del texto del comprobante coincide con la leyenda del banco
+                match = process.extractOne(text, cobradores_lista)
+
+                if match and match[1] >= 60:  # Umbral de coincidencia flexible para nombres de clientes
+                    client_legend = match[0]
+                    row_data = df_bank[df_bank[ley_col_real] == client_legend]
+
+                    if not row_data.empty:
+                        matched_records.append(row_data.iloc[0])
+                        matched_invoices.append(invoice)
+
+            if not matched_records:
+                messagebox.showinfo("Sin coincidencias", "No se encontraron comprobantes que coincidan con los registros del banco.")
+                return
+
+            df_matched = pd.DataFrame(matched_records)
+
+            # 3. Calcular la autosuma de las transferencias
+            total_autosuma = df_matched[cred_col_real].sum()
+
+            # 4. Guardar la nueva planilla con la autosuma y los datos
+            output_excel_name = f"Planilla_Creada_{os.path.basename(self.folder_path)}.xlsx"
+            output_excel_path = os.path.join(self.folder_path, output_excel_name)
+
+            with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
+                df_matched.to_excel(writer, sheet_name='Conciliacion', index=False)
+                # Agregamos una fila con la autosuma al final o como resumen
+                summary_df = pd.DataFrame([[ 'TOTAL AUTOSUMA', total_autosuma ]], columns=[ley_col_real, cred_col_real])
+                summary_df.to_excel(writer, sheet_name='Resumen', index=False)
+
+            # 5. Modificar el archivo del banco original (eliminando las filas conciliadas para que cambie de tamaño/fecha)
+            for client_legend in df_matched[ley_col_real]:
+                mask = (df_bank[ley_col_real] == client_legend)
+                df_bank = df_bank.loc[~mask]
+
+            # Devolvemos las columnas originales al dataframe del banco antes de guardarlo
+            df_bank.columns = bank_cols
+
+            if bank_file.endswith('.csv'):
+                df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
+            else:
+                df_bank.to_excel(bank_file, index=False)
+
+            messagebox.showinfo("Proceso Completado", f"¡Proceso exitoso!\nSe creó la planilla: {output_excel_name}\nSe modificó el archivo del banco original restando los registros.")
+
         except Exception as e:
             messagebox.showerror("Error", f"Ocurrió un error durante el proceso:\n{e}")
 
@@ -68,7 +117,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         return bank_file, invoices
 
-    def read_bank_file(self, bank_file):
+    def read_bank_file_full(self, bank_file):
         if bank_file.endswith('.csv'):
             try:
                 df = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
@@ -77,50 +126,22 @@ class ComprobanteConciliacionApp(tk.Tk):
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
+        original_cols = df.columns
         df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
         
-        col_mapping = {}
+        cred_col_real = None
+        ley_col_real = None
         for col in df.columns:
-            col_lower = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
-            if 'fecha' in col_lower:
-                col_mapping['Fecha'] = col
-            elif 'credito' in col_lower or 'monto' in col_lower or 'haber' in col_lower:
-                col_mapping['Creditos'] = col
-            elif 'leyenda' in col_lower or 'descripcion' in col_lower or 'detalle' in col_lower or 'concepto' in col_lower:
-                col_mapping['Leyenda Adicional1'] = col
+            c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+            if 'credito' in c_low or 'monto' in c_low or 'haber' in c_low:
+                cred_col_real = col
+            if 'leyenda' in c_low or 'descripcion' in c_low or 'detalle' in c_low or 'concepto' in c_low:
+                ley_col_real = col
 
-        missing = [k for k in ['Fecha', 'Creditos', 'Leyenda Adicional1'] if k not in col_mapping]
-        if missing:
-            raise ValueError(f"No se pudieron identificar automáticamente las columnas: {missing}. Columnas encontradas: {list(df.columns)}")
+        if not cred_col_real or not ley_col_real:
+            raise ValueError(f"No se pudieron identificar las columnas de montos o leyendas. Columnas encontradas: {list(df.columns)}")
 
-        df = df.rename(columns={v: k for k, v in col_mapping.items()})
-        relevant_columns = ['Fecha', 'Creditos', 'Leyenda Adicional1']
-        return df[relevant_columns]
-
-    def process_invoices(self, invoices, df_bank):
-        processed_data = {}
-        # CORREGIDO: Uso de list() nativo en lugar de .tolist() para evitar errores de tipo en Pandas
-        cobradores_lista = list(df_bank['Leyenda Adicional1'].dropna())
-
-        for invoice in invoices:
-            text = self.extract_text(invoice)
-            cobrador_match = process.extractOne(text, cobradores_lista)
-            
-            if cobrador_match and cobrador_match[1] >= 70:
-                cobrador_name = cobrador_match[0]
-                
-                matching_rows = df_bank.loc[df_bank['Leyenda Adicional1'] == cobrador_name]
-
-                if not matching_rows.empty:
-                    credit_amount = matching_rows['Creditos'].values[0]
-
-                    if cobrador_name not in processed_data:
-                        processed_data[cobrador_name] = {'invoices': [], 'bank': []}
-
-                    processed_data[cobrador_name]['invoices'].append({'file_path': invoice, 'text': text})
-                    processed_data[cobrador_name]['bank'].append(credit_amount)
-
-        return processed_data
+        return df, original_cols, cred_col_real, ley_col_real
 
     def extract_text(self, file_path):
         extracted_text = ""
@@ -136,48 +157,6 @@ class ComprobanteConciliacionApp(tk.Tk):
             print(f"Error al extraer texto de {file_path}: {e}")
 
         return re.sub(r'\s+', ' ', extracted_text.strip())
-
-    def save_conciliacion(self, data, cobrador, bank_file):
-        folder_name = f"Rendicion_{os.path.basename(self.folder_path)}_{cobrador}"
-        output_folder = os.path.join(self.folder_path, folder_name)
-
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
-
-        for invoice in data['invoices']:
-            src_file = invoice['file_path']
-            dst_file = os.path.join(output_folder, os.path.basename(src_file))
-            shutil.copy2(src_file, dst_file)
-
-        if bank_file:
-            if bank_file.endswith('.csv'):
-                df_bank = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
-            else:
-                df_bank = pd.read_excel(bank_file)
-
-            original_cols = df_bank.columns
-            df_bank.columns = df_bank.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
-            
-            cred_col_real = None
-            ley_col_real = None
-            for col in df_bank.columns:
-                c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
-                if 'credito' in c_low or 'monto' in c_low or 'haber' in c_low:
-                    cred_col_real = col
-                if 'leyenda' in c_low or 'descripcion' in c_low or 'detalle' in c_low or 'concepto' in c_low:
-                    ley_col_real = col
-
-            if cred_col_real and ley_col_real:
-                for credit in data['bank']:
-                    mask = (df_bank[cred_col_real] == credit) & (df_bank[ley_col_real] == cobrador)
-                    df_bank = df_bank.loc[~mask]
-
-            df_bank.columns = original_cols
-
-            if bank_file.endswith('.csv'):
-                df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
-            else:
-                df_bank.to_excel(bank_file, index=False)
 
 if __name__ == "__main__":
     app = ComprobanteConciliacionApp()
