@@ -39,8 +39,16 @@ class ComprobanteConciliacionApp(tk.Tk):
             return
 
         bank_file, invoices = self.find_files(self.folder_path)
-        if not bank_file or not invoices:
-            messagebox.showwarning("Advertencia", "No se encontraron archivos bancarios o comprobantes en la carpeta.")
+        
+        print(f"\n[DEBUG] Archivo del banco encontrado: {bank_file}")
+        print(f"[DEBUG] Cantidad de comprobantes encontrados: {len(invoices)}")
+
+        if not bank_file:
+            messagebox.showwarning("Advertencia", "No se encontró ningún archivo de banco (.csv o .xlsx) en la carpeta.")
+            return
+            
+        if not invoices:
+            messagebox.showwarning("Advertencia", "No se encontraron comprobantes (.png, .jpg, .pdf) en la carpeta.")
             return
 
         try:
@@ -49,18 +57,15 @@ class ComprobanteConciliacionApp(tk.Tk):
             matched_records = []
             cobradores_lista = list(df_bank[ley_col_real].dropna().astype(str))
 
-            print("\n--- LEYENDAS DISPONIBLES EN EL BANCO ---")
-            print(cobradores_lista[:10]) # Muestra las primeras 10 para verificar
-
             for invoice in invoices:
                 text = self.extract_text(invoice)
-                print(f"\n[TEXTO EXTRAÍDO DE: {os.path.basename(invoice)}]")
-                print(text[:200]) # Muestra los primeros 200 caracteres para ver qué leyó
+                print(f"\nProcesando archivo: {os.path.basename(invoice)}")
+                print(f"Texto leído: {text[:150]}...")
 
                 match = process.extractOne(text, cobradores_lista)
-                print(f"-> Mejor coincidencia encontrada: {match}")
+                print(f"Mejor coincidencia en banco: {match}")
 
-                if match and match[1] >= 40:  # Bajamos temporalmente a 40 para ver si cazamos algo
+                if match and match[1] >= 30:  # Umbral ultra flexible para asegurar que capture algo
                     client_legend = match[0]
                     row_data = df_bank[df_bank[ley_col_real] == client_legend]
 
@@ -68,7 +73,7 @@ class ComprobanteConciliacionApp(tk.Tk):
                         matched_records.append(row_data.iloc[0])
 
             if not matched_records:
-                messagebox.showinfo("Sin coincidencias", "Revisá la terminal de comandos: ahí imprimí lo que leyó el OCR para ver por qué no coincide con el banco.")
+                messagebox.showinfo("Sin coincidencias", "Se leyeron los comprobantes pero ningún texto coincidió con el banco. Mirá la terminal para ver los detalles.")
                 return
 
             df_matched = pd.DataFrame(matched_records)
@@ -93,7 +98,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             else:
                 df_bank.to_excel(bank_file, index=False)
 
-            messagebox.showinfo("Proceso Completado", f"¡Proceso exitoso!\nSe creó la planilla: {output_excel_name}")
+            messagebox.showinfo("Proceso Completado", f"¡Proceso exitoso!\nSe creó la planilla: {output_excel_name}\nSe modificó el archivo del banco original.")
 
         except Exception as e:
             messagebox.showerror("Error", f"Ocurrió un error durante el proceso:\n{e}")
@@ -102,13 +107,16 @@ class ComprobanteConciliacionApp(tk.Tk):
         bank_file = None
         invoices = []
 
-        for root, _, files in os.walk(folder_path):
+        for root, dirs, files in os.walk(folder_path):
             for file in files:
                 file_lower = file.lower()
-                if file_lower.endswith(('.csv', '.xlsx', '.txt')) and not bank_file:
-                    bank_file = os.path.join(root, file)
+                file_path = os.path.join(root, file)
+                # Detectar primer archivo de banco válido
+                if file_lower.endswith(('.csv', '.xlsx', '.txt')) and not bank_file and not file.startswith('Planilla_Creada'):
+                    bank_file = file_path
+                # Detectar comprobantes de imagen o pdf
                 elif file_lower.endswith(('.png', '.jpg', '.jpeg', '.pdf')):
-                    invoices.append(os.path.join(root, file))
+                    invoices.append(file_path)
 
         return bank_file, invoices
 
@@ -134,7 +142,7 @@ class ComprobanteConciliacionApp(tk.Tk):
                 ley_col_real = col
 
         if not cred_col_real or not ley_col_real:
-            raise ValueError(f"No se pudieron identificar las columnas. Columnas encontradas: {list(df.columns)}")
+            raise ValueError(f"No se pudieron identificar las columnas de montos o leyendas. Columnas encontradas: {list(df.columns)}")
 
         return df, original_cols, cred_col_real, ley_col_real
 
