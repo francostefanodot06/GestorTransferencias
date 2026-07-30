@@ -40,9 +40,6 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         bank_file, invoices = self.find_files(self.folder_path)
         
-        print(f"\n[DEBUG] Archivo del banco encontrado: {bank_file}")
-        print(f"[DEBUG] Cantidad de comprobantes encontrados: {len(invoices)}")
-
         if not bank_file:
             messagebox.showwarning("Advertencia", "No se encontró ningún archivo de banco (.csv o .xlsx) en la carpeta.")
             return
@@ -56,35 +53,39 @@ class ComprobanteConciliacionApp(tk.Tk):
             
             matched_records = []
             
-            # Limpiamos bien la columna de leyendas para que solo queden textos de clientes válidos
+            # Forzamos una lista limpia de textos de la columna de conceptos/leyendas del banco
             cobradores_lista = df_bank[ley_col_real].dropna().astype(str).tolist()
-            # Quitamos posibles nombres de columnas colados por error
-            cobradores_lista = [item for item in cobradores_lista if item != ley_col_real and item.lower() != 'nan']
 
-            print(f"\n[DEBUG] Total de leyendas de clientes en el banco: {len(cobradores_lista)}")
-            
+            print(f"\n[DEBUG] Columna de búsqueda usada: {ley_col_real}")
+            print(f"[DEBUG] Total de registros en el banco: {len(cobradores_lista)}")
+
             for invoice in invoices:
                 text = self.extract_text(invoice)
-                print(f"\nProcesando archivo: {os.path.basename(invoice)}")
-                print(f"Texto leído: {text[:150]}...")
+                print(f"\nProcesando: {os.path.basename(invoice)}")
+                print(f"Texto leído: {text[:100]}...")
 
+                # Buscamos la mejor coincidencia
                 match = process.extractOne(text, cobradores_lista)
-                print(f"Mejor coincidencia en banco: {match}")
+                print(f"Mejor coincidencia: {match}")
 
-                if match and match[1] >= 30:  # Umbral ultra flexible para asegurar que capture algo
+                # Si encuentra un match razonable (umbral 30 para texto OCR imperfecto)
+                if match and match[1] >= 30:
                     client_legend = match[0]
+                    # Obtenemos la fila exacta que coincide con esa leyenda
                     row_data = df_bank[df_bank[ley_col_real] == client_legend]
 
                     if not row_data.empty:
                         matched_records.append(row_data.iloc[0])
 
             if not matched_records:
-                messagebox.showinfo("Sin coincidencias", "Se leyeron los comprobantes pero ningún texto coincidió con el banco. Mirá la terminal para ver los detalles.")
+                messagebox.showinfo("Sin coincidencias", "Ningún comprobante hizo match con las leyendas del banco.")
                 return
 
+            # Creamos el DataFrame con los registros encontrados
             df_matched = pd.DataFrame(matched_records)
             total_autosuma = df_matched[cred_col_real].sum()
 
+            # Guardamos la planilla nueva con la autosuma
             output_excel_name = f"Planilla_Creada_{os.path.basename(self.folder_path)}.xlsx"
             output_excel_path = os.path.join(self.folder_path, output_excel_name)
 
@@ -93,12 +94,15 @@ class ComprobanteConciliacionApp(tk.Tk):
                 summary_df = pd.DataFrame([[ 'TOTAL AUTOSUMA', total_autosuma ]], columns=[ley_col_real, cred_col_real])
                 summary_df.to_excel(writer, sheet_name='Resumen', index=False)
 
+            # Eliminamos del DataFrame original del banco las filas que ya se conciliaron
             for client_legend in df_matched[ley_col_real]:
                 mask = (df_bank[ley_col_real] == client_legend)
                 df_bank = df_bank.loc[~mask]
 
+            # Restauramos las columnas originales
             df_bank.columns = bank_cols
 
+            # Guardamos el archivo del banco modificado (esto cambia su fecha de modificación)
             if bank_file.endswith('.csv'):
                 df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
             else:
@@ -117,10 +121,8 @@ class ComprobanteConciliacionApp(tk.Tk):
             for file in files:
                 file_lower = file.lower()
                 file_path = os.path.join(root, file)
-                # Detectar primer archivo de banco válido
                 if file_lower.endswith(('.csv', '.xlsx', '.txt')) and not bank_file and not file.startswith('Planilla_Creada'):
                     bank_file = file_path
-                # Detectar comprobantes de imagen o pdf
                 elif file_lower.endswith(('.png', '.jpg', '.jpeg', '.pdf')):
                     invoices.append(file_path)
 
@@ -140,12 +142,20 @@ class ComprobanteConciliacionApp(tk.Tk):
         
         cred_col_real = None
         ley_col_real = None
+        
+        # Buscamos de manera inteligente las columnas correctas basándonos en nombres comunes
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
-            if 'credito' in c_low or 'monto' in c_low or 'haber' in c_low:
+            if any(term in c_low for term in ['credito', 'monto', 'haber', 'importe']):
                 cred_col_real = col
-            if 'leyenda' in c_low or 'descripcion' in c_low or 'detalle' in c_low or 'concepto' in c_low:
+            if any(term in c_low for term in ['leyenda', 'descripcion', 'detalle', 'concepto', 'referencia']):
                 ley_col_real = col
+
+        # Plan B si no encuentra por palabras clave exactas: agarramos la segunda columna para texto y la de créditos por posición o tipo numérico
+        if not ley_col_real and len(df.columns) > 1:
+            ley_col_real = df.columns[1] 
+        if not cred_col_real and len(df.columns) > 2:
+            cred_col_real = df.columns[2]
 
         if not cred_col_real or not ley_col_real:
             raise ValueError(f"No se pudieron identificar las columnas de montos o leyendas. Columnas encontradas: {list(df.columns)}")
