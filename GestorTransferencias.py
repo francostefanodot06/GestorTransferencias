@@ -140,25 +140,34 @@ class ComprobanteConciliacionApp(tk.Tk):
         original_cols = df.columns
         df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
         
+        print("\n--- COLUMNAS ENCONTRADAS EN TU ARCHIVO DEL BANCO ---")
+        for i, col in enumerate(df.columns):
+            print(f"[{i}] -> {col}")
+
+        # Forzamos la selección manual inteligente o por índice si querés
+        # Por defecto buscamos la que tenga más texto o la columna donde suelen estar los nombres (ej. concepto, detalle, referencia, etc.)
         cred_col_real = None
         ley_col_real = None
         
-        # Buscamos de manera inteligente las columnas correctas basándonos en nombres comunes
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
             if any(term in c_low for term in ['credito', 'monto', 'haber', 'importe']):
                 cred_col_real = col
-            if any(term in c_low for term in ['leyenda', 'descripcion', 'detalle', 'concepto', 'referencia']):
+            if any(term in c_low for term in ['leyenda', 'descripcion', 'detalle', 'concepto', 'referencia', 'nombre', 'cliente']):
                 ley_col_real = col
 
-        # Plan B si no encuentra por palabras clave exactas: agarramos la segunda columna para texto y la de créditos por posición o tipo numérico
-        if not ley_col_real and len(df.columns) > 1:
-            ley_col_real = df.columns[1] 
-        if not cred_col_real and len(df.columns) > 2:
-            cred_col_real = df.columns[2]
+        # Si aún así no encuentra la de texto, agarramos la columna que tenga strings largos (nombres) en lugar de la columna "Imputado"
+        if not ley_col_real:
+            for col in df.columns:
+                if col.lower() != 'imputado' and df[col].dtype == 'object':
+                    ley_col_real = col
+                    break
 
-        if not cred_col_real or not ley_col_real:
-            raise ValueError(f"No se pudieron identificar las columnas de montos o leyendas. Columnas encontradas: {list(df.columns)}")
+        if not cred_col_real:
+            cred_col_real = df.columns[-1] # Por lo general el monto está al final
+
+        print(f"Columna de montos elegida: {cred_col_real}")
+        print(f"Columna de conceptos/clientes elegida: {ley_col_real}")
 
         return df, original_cols, cred_col_real, ley_col_real
 
