@@ -91,21 +91,31 @@ class ComprobanteConciliacionApp(tk.Tk):
         
         cred_col_real, ley_col_real = None, None
         
+        # Búsqueda flexible de columna de créditos/montos
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
-            if any(term in c_low for term in ['creditos', 'montos', 'haberes', 'importe']):
+            if any(term in c_low for term in ['credito', 'monto', 'haber', 'importe', 'valor', 'saldo']):
                 cred_col_real = col
+                break
 
+        # Búsqueda flexible de la leyenda o descripción del cliente
         for col in df.columns:
-            if 'leyenda' in col.lower() and 'adicional1' in col.lower():
+            c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+            if 'leyenda' in c_low or 'adicional' in c_low or 'concepto' in c_low or 'detalle' in c_low or 'descripcion' in c_low:
                 ley_col_real = col
                 break
 
-        if not cred_col_real and len(df.columns) > 0:
-            cred_col_real = df.columns[-1]
+        # Si no encuentra por nombre, asignamos por posición común en extractos bancarios (ej: Columna D para monto, L para leyenda)
+        if not cred_col_real and len(df.columns) > 3:
+            cred_col_real = df.columns[3] # Comúnmente la columna D
+        if not ley_col_real and len(df.columns) > 11:
+            ley_col_real = df.columns[11] # Comúnmente la columna L (Leyenda Adicional1)
+        elif not ley_col_real and len(df.columns) > 0:
+            ley_col_real = df.columns[-1]
 
-        if not ley_col_real:
-            raise ValueError("No se encontró la columna 'Leyenda Adicional1' en el archivo del banco.")
+        if not cred_col_real or not ley_col_real:
+            cols_str = ", ".join(list(df.columns))
+            raise ValueError(f"No se pudieron identificar las columnas de montos o leyenda.\nColumnas disponibles: [{cols_str}]")
 
         return df, cred_col_real, ley_col_real
 
@@ -120,7 +130,6 @@ class ComprobanteConciliacionApp(tk.Tk):
             text = self.extract_text(invoice)
             text_upper = text.upper()
             
-            # Extraer montos del comprobante (formato decimal y entero)
             montos_en_texto = re.findall(r'\b\d{1,3}(?:\.\d{3})*(?:,\d+)?\b|\b\d+(?:,\d+)?\b', text)
             montos_limpios = []
             for m in montos_en_texto:
@@ -133,7 +142,6 @@ class ComprobanteConciliacionApp(tk.Tk):
 
             match_encontrado = False
 
-            # Recorrer las filas del banco pendientes para buscar coincidencia cruzada
             for idx, row in df_bank_work.iterrows():
                 banco_nombre = str(row[ley_col]).strip()
                 banco_monto = row[cred_col]
@@ -143,12 +151,9 @@ class ComprobanteConciliacionApp(tk.Tk):
                 except ValueError:
                     banco_monto_float = 0.0
 
-                # Validar si el monto del banco coincide con alguno del comprobante (margen de error menor a 1 unidad)
                 monto_coincide = any(abs(m - banco_monto_float) < 1.0 for m in montos_limpios)
 
-                if monto_coincide and banco_nombre:
-                    # Limpiar el nombre del banco para buscar palabras clave o fragmentos en el texto del OCR
-                    # Dividimos el nombre del cliente en palabras significativas (mayores a 3 letras)
+                if monto_coincide and banco_nombre and banco_nombre != 'nan':
                     palabras_cliente = [p for p in re.findall(r'[A-Z0-9]+', banco_nombre.upper()) if len(p) > 3]
                     
                     coincidencias_palabras = 0
@@ -156,14 +161,12 @@ class ComprobanteConciliacionApp(tk.Tk):
                         if palabra in text_upper:
                             coincidencias_palabras += 1
 
-                    # Si el nombre aparece parcialmente en el texto o el fuzzy match del nombre da alto (>65)
                     nombre_coincide = False
-                    if palabras_cliente and (coincidencias_palabras / len(palabras_cliente) >= 0.5):
+                    if palabras_cliente and (coincidencias_palabras / len(palabras_cliente) >= 0.4):
                         nombre_coincide = True
                     else:
-                        # Fallback por similitud de texto general
                         similitud = fuzz.partial_ratio(banco_nombre.upper(), text_upper)
-                        if similitud >= 65:
+                        if similitud >= 60:
                             nombre_coincide = True
 
                     if nombre_coincide:
@@ -173,7 +176,6 @@ class ComprobanteConciliacionApp(tk.Tk):
                             'monto': banco_monto,
                             'fecha': row['Fecha'] if 'Fecha' in df_bank_work.columns else ''
                         })
-                        # Eliminar del banco de trabajo para que no se vuelva a usar
                         df_bank_work = df_bank_work.drop(idx)
                         match_encontrado = True
                         break
@@ -224,7 +226,6 @@ class ComprobanteConciliacionApp(tk.Tk):
 
             df_final.to_excel(writer, sheet_name='Conciliacion_y_Faltantes', index=False)
 
-        # Actualizar el archivo del banco original removiendo los ítems conciliados
         df_banco_original = df_bank.copy()
         if processed_data['conciliados']:
             for item in processed_data['conciliados']:
