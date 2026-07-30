@@ -140,37 +140,38 @@ class ComprobanteConciliacionApp(tk.Tk):
         original_cols = df.columns
         df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
         
-        print("\n--- COLUMNAS ENCONTRADAS EN TU ARCHIVO DEL BANCO ---")
-        for i, col in enumerate(df.columns):
-            print(f"[{i}] -> {col}")
-
-        # Forzamos la selección manual inteligente o por índice si querés
-        # Por defecto buscamos la que tenga más texto o la columna donde suelen estar los nombres (ej. concepto, detalle, referencia, etc.)
         cred_col_real = None
         ley_col_real = None
         
+        # Buscamos la columna de créditos/montos
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
             if any(term in c_low for term in ['credito', 'monto', 'haber', 'importe']):
                 cred_col_real = col
-            if any(term in c_low for term in ['leyenda', 'descripcion', 'detalle', 'concepto', 'referencia', 'nombre', 'cliente']):
-                ley_col_real = col
 
-        # Si aún así no encuentra la de texto, agarramos la columna que tenga strings largos (nombres) en lugar de la columna "Imputado"
+        # Forzamos exactamente la columna que me dijiste: Leyenda Adicional1
+        for col in df.columns:
+            if col.strip().lower() == 'leyenda adicional1':
+                ley_col_real = col
+                break
+
+        # Plan B por si tiene algún espacio o variante leve
         if not ley_col_real:
             for col in df.columns:
-                if col.lower() != 'imputado' and df[col].dtype == 'object':
+                if 'leyenda' in col.lower() and 'adicional' in col.lower():
                     ley_col_real = col
                     break
 
-        if not cred_col_real:
-            cred_col_real = df.columns[-1] # Por lo general el monto está al final
+        if not cred_col_real and len(df.columns) > 0:
+            cred_col_real = df.columns[-1]
 
-        print(f"Columna de montos elegida: {cred_col_real}")
-        print(f"Columna de conceptos/clientes elegida: {ley_col_real}")
+        if not ley_col_real:
+            raise ValueError("No se encontró la columna 'Leyenda Adicional1' en el archivo del banco.")
+
+        print(f"[DEBUG] Columna de Montos elegida: {cred_col_real}")
+        print(f"[DEBUG] Columna de Conceptos elegida (Fija): {ley_col_real}")
 
         return df, original_cols, cred_col_real, ley_col_real
-
     def extract_text(self, file_path):
         extracted_text = ""
         try:
