@@ -55,8 +55,14 @@ class ComprobanteConciliacionApp(tk.Tk):
             df_bank, bank_cols, cred_col_real, ley_col_real = self.read_bank_file_full(bank_file)
             
             matched_records = []
-            cobradores_lista = list(df_bank[ley_col_real].dropna().astype(str))
+            
+            # Limpiamos bien la columna de leyendas para que solo queden textos de clientes válidos
+            cobradores_lista = df_bank[ley_col_real].dropna().astype(str).tolist()
+            # Quitamos posibles nombres de columnas colados por error
+            cobradores_lista = [item for item in cobradores_lista if item != ley_col_real and item.lower() != 'nan']
 
+            print(f"\n[DEBUG] Total de leyendas de clientes en el banco: {len(cobradores_lista)}")
+            
             for invoice in invoices:
                 text = self.extract_text(invoice)
                 print(f"\nProcesando archivo: {os.path.basename(invoice)}")
