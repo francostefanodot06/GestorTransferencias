@@ -44,13 +44,16 @@ class ComprobanteConciliacionApp(tk.Tk):
             return
 
         try:
-            df_bank, original_cols, cred_col_real, ley_col_real = self.read_bank_file_full(bank_file)
-            processed_data = self.process_invoices(invoices, df_bank)
+            # 1. Leemos el archivo del banco original con todas sus columnas intactas
+            df_bank, cred_col_real, ley_col_real = self.read_bank_file_full(bank_file)
+            
+            # 2. Procesamos los comprobantes con un umbral seguro
+            processed_data = self.process_invoices(invoices, df_bank, cred_col_real, ley_col_real)
 
-            # Guardamos la planilla multitab con conciliados y no encontrados
-            self.save_conciliacion_multitab(processed_data, bank_file)
+            # 3. Guardamos la planilla limpia (sin totales) y actualizamos el banco (cortando/borrando filas)
+            self.save_conciliacion_and_update_bank(processed_data, bank_file, df_bank, cred_col_real, ley_col_real)
 
-            messagebox.showinfo("Proceso Completado", f"¡Proceso exitoso!\nSe creó la planilla con solapas múltiples.\nSe modificó el archivo del banco original.")
+            messagebox.showinfo("Proceso Completado", "¡Proceso exitoso!\nSe generó la planilla limpia y se descontaron los ítems del banco.")
         except Exception as e:
             messagebox.showerror("Error", f"Ocurrió un error durante el proceso:\n{e}")
 
@@ -77,7 +80,7 @@ class ComprobanteConciliacionApp(tk.Tk):
         elif bank_file.endswith('.xlsx'):
             df = pd.read_excel(bank_file)
 
-        original_cols = df.columns
+        # Limpiamos nombres de columnas de espacios o caracteres raros
         df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
         
         cred_col_real = None
@@ -105,40 +108,39 @@ class ComprobanteConciliacionApp(tk.Tk):
         if not ley_col_real:
             raise ValueError("No se encontró la columna 'Leyenda Adicional1' en el archivo del banco.")
 
-        return df, original_cols, cred_col_real, ley_col_real
+        return df, cred_col_real, ley_col_real
 
-    def process_invoices(self, invoices, df_bank):
+    def process_invoices(self, invoices, df_bank, cred_col, ley_col):
         processed_data = {'conciliados': [], 'no_encontrados': []}
-        cobradores_lista = df_bank['Leyenda Adicional1'].dropna().tolist()
+        cobradores_lista = df_bank[ley_col].dropna().astype(str).tolist()
 
         for invoice in invoices:
             text = self.extract_text(invoice)
-            # Umbral subido a 78 para evitar falsos positivos
             cobrador_match = process.extractOne(text, cobradores_lista)
             
             encontrado = False
-            if cobrador_match and cobrador_match[1] >= 78:
+            if cobrador_match and cobrador_match[1] >= 75:  # Umbral seguro anti falsos positivos
                 cobrador_name = cobrador_match[0]
-                matching_rows = df_bank.loc[df_bank['Leyenda Adicional1'] == cobrador_name]
+                matching_rows = df_bank.loc[df_bank[ley_col].astype(str) == cobrador_name]
 
                 if not matching_rows.empty:
-                    credit_amount = matching_rows['Creditos'].values[0] if 'Creditos' in matching_rows.columns else matching_rows.iloc[0, 1]
-                    fecha_banco = matching_rows['Fecha'].values[0] if 'Fecha' in matching_rows.columns else ''
+                    # Extraemos los datos reales de esa fila del banco
+                    row_data = matching_rows.iloc[0]
+                    credit_amount = row_data[cred_col]
+                    fecha_banco = row_data['Fecha'] if 'Fecha' in df_bank.columns else ''
 
                     processed_data['conciliados'].append({
                         'archivo': os.path.basename(invoice),
                         'cliente': cobrador_name,
                         'monto': credit_amount,
-                        'fecha': fecha_banco,
-                        'file_path': invoice
+                        'fecha': fecha_banco
                     })
                     encontrado = True
 
             if not encontrado:
                 processed_data['no_encontrados'].append({
                     'archivo': os.path.basename(invoice),
-                    'texto_leido': text[:150] + "..." if len(text) > 150 else text,
-                    'file_path': invoice
+                    'texto_leido': text[:150] + "..." if len(text) > 150 else text
                 })
 
         return processed_data
@@ -158,60 +160,38 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         return re.sub(r'\s+', ' ', extracted_text.strip())
 
-    def save_conciliacion_multitab(self, processed_data, bank_file):
+    def save_conciliacion_and_update_bank(self, processed_data, bank_file, df_bank, cred_col, ley_col):
         output_excel = os.path.join(self.folder_path, f"Planilla_Conciliacion_{os.path.basename(self.folder_path)}.xlsx")
         
+        # 1. Guardar la planilla de salida SIN filas de totales
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-            # 1. Solapa Conciliados con Autosuma
             if processed_data['conciliados']:
                 df_conc = pd.DataFrame(processed_data['conciliados'])
-                # Quitamos la ruta interna para que la planilla quede limpia
-                df_clean = df_conc.drop(columns=['file_path'], errors='ignore')
-                
-                total_monto = df_clean['monto'].sum() if 'monto' in df_clean.columns else 0
-                df_totales = pd.DataFrame([{'archivo': 'TOTAL GENERAL', 'cliente': '', 'monto': total_monto, 'fecha': ''}])
-                df_final_conc = pd.concat([df_clean, df_totales], ignore_index=True)
-                df_final_conc.to_excel(writer, sheet_name='Conciliados', index=False)
+                df_conc.to_excel(writer, sheet_name='Conciliados', index=False)
             else:
                 pd.DataFrame({'Mensaje': ['No hubo comprobantes conciliados']}).to_excel(writer, sheet_name='Conciliados', index=False)
 
-            # 2. Solapa No Encontrados
             if processed_data['no_encontrados']:
                 df_no_enc = pd.DataFrame(processed_data['no_encontrados'])
-                df_no_enc_clean = df_no_enc.drop(columns=['file_path'], errors='ignore')
-                df_no_enc_clean.to_excel(writer, sheet_name='No_Encontrados', index=False)
+                df_no_enc.to_excel(writer, sheet_name='No_Encontrados', index=False)
             else:
                 pd.DataFrame({'Mensaje': ['Todos los comprobantes hicieron match con éxito']}).to_excel(writer, sheet_name='No_Encontrados', index=False)
 
-        # Modificación del archivo del banco original (eliminando los ya conciliados)
-        if bank_file and processed_data['conciliados']:
-            if bank_file.endswith('.csv'):
-                df_bank = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
-            else:
-                df_bank = pd.read_excel(bank_file)
+        # 2. Descontar (borrar) del DataFrame del banco las filas que ya se conciliaron
+        if processed_data['conciliados']:
+            for item in processed_data['conciliados']:
+                # Filtramos para eliminar exactamente la fila que coincide en monto y leyenda
+                mask = (df_bank[cred_col] == item['monto']) & (df_bank[ley_col].astype(str) == str(item['cliente']))
+                # Borramos la primera coincidencia exacta encontrada
+                idx_to_drop = df_bank[mask].index
+                if not idx_to_drop.empty:
+                    df_bank = df_bank.drop(idx_to_drop[0])
 
-            original_cols = df_bank.columns
-            df_bank.columns = df_bank.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
-            
-            cred_col_real, ley_col_real = None, None
-            for col in df_bank.columns:
-                c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
-                if any(term in c_low for term in ['credito', 'monto', 'haber', 'importe']):
-                    cred_col_real = col
-                if col.strip().lower() == 'leyenda adicional1' or ('leyenda' in c_low and 'adicional' in c_low):
-                    ley_col_real = col
-
-            if cred_col_real and ley_col_real:
-                for item in processed_data['conciliados']:
-                    mask = (df_bank[cred_col_real] == item['monto']) & (df_bank[ley_col_real] == item['cliente'])
-                    df_bank = df_bank.loc[~mask]
-
-            df_bank.columns = original_cols
-
-            if bank_file.endswith('.csv'):
-                df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
-            else:
-                df_bank.to_excel(bank_file, index=False)
+        # 3. Guardar el archivo del banco actualizado (pisando el original con las filas ya restadas)
+        if bank_file.endswith('.csv'):
+            df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
+        else:
+            df_bank.to_excel(bank_file, index=False)
 
 if __name__ == "__main__":
     app = ComprobanteConciliacionApp()
