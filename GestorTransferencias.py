@@ -1,6 +1,6 @@
 import os
 import re
-import shutil
+import warnings
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import pandas as pd
@@ -8,54 +8,57 @@ from PIL import Image
 import pytesseract
 from fuzzywuzzy import process
 from pdf2image import convert_from_path
-import warnings
+
+# Ignorar warnings molestos
 warnings.filterwarnings('ignore', category=UserWarning)
 
-# Configurar Tesseract (ajusta la ruta según tu sistema)
+# Configurar Tesseract
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 class ComprobanteConciliacionApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Conciliación de Comprobantes")
-        self.geometry("400x300")
+        self.geometry("400x250")
 
         self.folder_path = None
         self.create_widgets()
 
     def create_widgets(self):
-        self.select_folder_button = tk.Button(self, text="Seleccionar Carpeta", command=self.select_folder)
-        self.select_folder_button.pack(pady=20)
+        tk.Label(self, text="Gestor de Conciliación Bancaria", font=("Arial", 11, "bold")).pack(pady=10)
+        
+        self.select_folder_button = tk.Button(self, text="1. Seleccionar Carpeta", command=self.select_folder, bg="#e0e0e0", width=25, height=2)
+        self.select_folder_button.pack(pady=5)
 
-        self.process_button = tk.Button(self, text="Procesar", command=self.process_files)
-        self.process_button.pack(pady=10)
+        self.process_button = tk.Button(self, text="2. Procesar Archivos", command=self.process_files, bg="#4CAF50", fg="white", width=25, height=2)
+        self.process_button.pack(pady=5)
 
     def select_folder(self):
         self.folder_path = filedialog.askdirectory(title="Selecciona la carpeta del día")
         if self.folder_path:
-            messagebox.showinfo("Carpeta Seleccionada", f"Carpeta seleccionada: {self.folder_path}")
+            messagebox.showinfo("Carpeta Seleccionada", f"Carpeta: {self.folder_path}")
 
     def process_files(self):
         if not self.folder_path:
-            messagebox.showwarning("Advertencia", "Debes seleccionar una carpeta primero.")
+            messagebox.showwarning("Atención", "Primero debés seleccionar una carpeta.")
             return
 
         bank_file, invoices = self.find_files(self.folder_path)
+        print(f"Archivo banco encontrado: {bank_file}")
+        print(f"Comprobantes encontrados: {len(invoices)}")
+
         if not bank_file or not invoices:
-            messagebox.showwarning("Advertencia", "No se encontraron archivos bancarios o comprobantes en la carpeta.")
+            messagebox.showwarning("Atención", "No se encontró el archivo del banco o los comprobantes en la carpeta.")
             return
 
         try:
             df_bank, cred_col_real, ley_col_real = self.read_bank_file_full(bank_file)
-            
-            # Procesamos con validación estricta (Nombre + Monto cruzado)
             processed_data = self.process_invoices_strict(invoices, df_bank, cred_col_real, ley_col_real)
-
             self.save_conciliacion_and_update_bank(processed_data, bank_file, df_bank, cred_col_real, ley_col_real)
 
-            messagebox.showinfo("Proceso Completado", "¡Proceso exitoso!\nSe conciliaron los datos y se registraron los faltantes.")
+            messagebox.showinfo("¡Listo!", "Proceso completado con éxito.")
         except Exception as e:
-            messagebox.showerror("Error", f"Ocurrió un error durante el proceso:\n{e}")
+            messagebox.showerror("Error crítico", str(e))
 
     def find_files(self, folder_path):
         bank_file = None
@@ -64,7 +67,7 @@ class ComprobanteConciliacionApp(tk.Tk):
         for root, _, files in os.walk(folder_path):
             for file in files:
                 file_lower = file.lower()
-                if file_lower.endswith(('.csv', '.xlsx', '.txt')) and not bank_file and not file.startswith('Planilla_Conciliacion'):
+                if file_lower.endswith(('.csv', '.xlsx', '.txt')) and not bank_file and not file.startswith('Planilla_'):
                     bank_file = os.path.join(root, file)
                 elif file_lower.endswith(('.png', '.jpg', '.jpeg', '.pdf')):
                     invoices.append(os.path.join(root, file))
@@ -82,8 +85,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
         
-        cred_col_real = None
-        ley_col_real = None
+        cred_col_real, ley_col_real = None, None
         
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
@@ -91,39 +93,29 @@ class ComprobanteConciliacionApp(tk.Tk):
                 cred_col_real = col
 
         for col in df.columns:
-            if col.strip().lower() == 'leyenda adicional1':
+            if 'leyenda' in col.lower() and 'adicional' in col.lower():
                 ley_col_real = col
                 break
-
-        if not ley_col_real:
-            for col in df.columns:
-                if 'leyenda' in col.lower() and 'adicional' in col.lower():
-                    ley_col_real = col
-                    break
 
         if not cred_col_real and len(df.columns) > 0:
             cred_col_real = df.columns[-1]
 
         if not ley_col_real:
-            raise ValueError("No se encontró la columna 'Leyenda Adicional1' en el archivo del banco.")
+            raise ValueError("No se encontró la columna 'Leyenda Adicional1' en el banco.")
 
         return df, cred_col_real, ley_col_real
 
     def process_invoices_strict(self, invoices, df_bank, cred_col, ley_col):
         conciliados = []
-        
-        # Pre-extraemos el texto de todos los comprobantes y buscamos números en ellos
         comprobantes_info = []
+        
         for invoice in invoices:
             text = self.extract_text(invoice)
-            # Extraemos todos los posibles montos numéricos del comprobante
             montos_en_texto = re.findall(r'\b\d{1,3}(?:\.\d{3})*(?:,\d+)?\b|\b\d+(?:,\d+)?\b', text)
-            # Limpiamos los montos a formato float para comparar bien
             montos_limpios = []
             for m in montos_en_texto:
-                m_clean = m.replace('.', '').replace(',', '.')
                 try:
-                    montos_limpios.append(float(m_clean))
+                    montos_limpios.append(float(m.replace('.', '').replace(',', '.')))
                 except ValueError:
                     pass
 
@@ -133,7 +125,6 @@ class ComprobanteConciliacionApp(tk.Tk):
                 'montos': montos_limpios
             })
 
-        # Recorremos cada registro del banco para ver si encuentra su comprobante exacto
         banco_pendientes = df_bank.copy()
         
         for idx, row in df_bank.iterrows():
@@ -145,14 +136,8 @@ class ComprobanteConciliacionApp(tk.Tk):
             except ValueError:
                 banco_monto_float = 0.0
 
-            match_encontrado = False
-            
             for comp in comprobantes_info:
-                # Verificamos si el nombre del banco aparece en el texto del comprobante con alta coincidencia o está contenido
-                # O si el FuzzyWuzzy del texto del comprobante da con el nombre del banco
                 match_score = process.extractOne(banco_nombre, [comp['text']])[1]
-                
-                # Validamos que coincida el nombre (score alto) Y que el monto del banco esté presente en los montos leídos del comprobante
                 monto_coincide = any(abs(m - banco_monto_float) < 1.0 for m in comp['montos'])
                 
                 if match_score >= 75 and monto_coincide:
@@ -162,12 +147,10 @@ class ComprobanteConciliacionApp(tk.Tk):
                         'monto': banco_monto,
                         'fecha': row['Fecha'] if 'Fecha' in df_bank.columns else ''
                     })
-                    # Quitamos este comprobante ya usado para que no se repita
                     comprobantes_info.remove(comp)
-                    match_encontrado = True
                     break
 
-        return {'conciliados': conciliados, 'banco_restante': banco_pendientes, 'comprobantes_sobrantes': comprobantes_info}
+        return {'conciliados': conciliados, 'banco_restante': banco_pendientes}
 
     def extract_text(self, file_path):
         extracted_text = ""
@@ -180,7 +163,7 @@ class ComprobanteConciliacionApp(tk.Tk):
                 image = Image.open(file_path).convert('RGB')
                 extracted_text = pytesseract.image_to_string(image)
         except Exception as e:
-            print(f"Error al extraer texto de {file_path}: {e}")
+            print(f"Error OCR: {e}")
 
         return re.sub(r'\s+', ' ', extracted_text.strip())
 
@@ -189,9 +172,7 @@ class ComprobanteConciliacionApp(tk.Tk):
         
         df_conciliados = pd.DataFrame(processed_data['conciliados'])
         
-        # Preparamos los faltantes (lo que quedó en el banco sin conciliar o comprobantes sobrantes)
         faltantes_list = []
-        # Si hay filas en el banco que no se conciliaron, las listamos al costado como faltantes
         conciliados_clientes = [c['cliente'] for c in processed_data['conciliados']]
         
         for idx, row in df_bank.iterrows():
@@ -201,32 +182,27 @@ class ComprobanteConciliacionApp(tk.Tk):
                 faltantes_list.append({
                     'Faltante_Cliente': cli,
                     'Faltante_Monto': monto,
-                    'Detalle': f"Faltó conciliar: {monto} de {cli}"
+                    'Detalle': f"Faltó: {monto} de {cli}"
                 })
 
         df_faltantes = pd.DataFrame(faltantes_list)
 
-        # Guardamos en un Excel combinando en columnas al costado (Conciliados en A-D, Faltantes en F en adelante)
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-            # Creamos una única solapa principal limpia donde se ve todo lado a lado
             df_final = pd.DataFrame()
-            
             if not df_conciliados.empty:
                 df_final = pd.concat([df_final, df_conciliados], axis=1)
             else:
-                df_final['Mensaje_Conciliados'] = ['No hubo coincidencias exactas']
+                df_final['Mensaje'] = ['Sin coincidencias']
 
-            # Agregamos una columna separadora vacía
             df_final['---'] = ''
 
             if not df_faltantes.empty:
                 df_final = pd.concat([df_final, df_faltantes], axis=1)
             else:
-                df_final['Mensaje_Faltantes'] = ['No hay faltantes']
+                df_final['Mensaje_Faltantes'] = ['Sin faltantes']
 
             df_final.to_excel(writer, sheet_name='Conciliacion_y_Faltantes', index=False)
 
-        # Actualizar el archivo del banco original borrando exclusivamente los conciliados
         if processed_data['conciliados']:
             for item in processed_data['conciliados']:
                 mask = (df_bank[cred_col] == item['monto']) & (df_bank[ley_col].astype(str) == str(item['cliente']))
@@ -238,3 +214,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
         else:
             df_bank.to_excel(bank_file, index=False)
+
+if __name__ == "__main__":
+    app = ComprobanteConciliacionApp()
+    app.mainloop()
