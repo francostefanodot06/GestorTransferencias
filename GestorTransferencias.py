@@ -116,15 +116,15 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         for invoice in invoices:
             text = self.extract_text(invoice)
+            # Bajamos el umbral a 50 para que el OCR no rechace los tickets válidos
             cobrador_match = process.extractOne(text, cobradores_lista)
             
             encontrado = False
-            if cobrador_match and cobrador_match[1] >= 75:  # Umbral seguro anti falsos positivos
+            if cobrador_match and cobrador_match[1] >= 50:
                 cobrador_name = cobrador_match[0]
                 matching_rows = df_bank.loc[df_bank[ley_col].astype(str) == cobrador_name]
 
                 if not matching_rows.empty:
-                    # Extraemos los datos reales de esa fila del banco
                     row_data = matching_rows.iloc[0]
                     credit_amount = row_data[cred_col]
                     fecha_banco = row_data['Fecha'] if 'Fecha' in df_bank.columns else ''
