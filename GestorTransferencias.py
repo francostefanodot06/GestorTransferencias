@@ -9,34 +9,36 @@ import pytesseract
 from fuzzywuzzy import process
 from pdf2image import convert_from_path
 
-# Ignorar warnings molestos
+# Ignorar advertencias menores de fuzzywuzzy
 warnings.filterwarnings('ignore', category=UserWarning)
 
-# Configurar Tesseract
+# Configurar ruta de Tesseract (Ajusta si es necesario)
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 class ComprobanteConciliacionApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Conciliación de Comprobantes")
-        self.geometry("400x250")
+        self.title("Conciliación de Comprobantes - Definitivo")
+        self.geometry("450x280")
+        self.configure(bg="#f0f0f0")
 
         self.folder_path = None
         self.create_widgets()
 
     def create_widgets(self):
-        tk.Label(self, text="Gestor de Conciliación Bancaria", font=("Arial", 11, "bold")).pack(pady=10)
+        title_label = tk.Label(self, text="Gestor de Conciliación Bancaria", font=("Arial", 12, "bold"), bg="#f0f0f0")
+        title_label.pack(pady=15)
         
-        self.select_folder_button = tk.Button(self, text="1. Seleccionar Carpeta", command=self.select_folder, bg="#e0e0e0", width=25, height=2)
+        self.select_folder_button = tk.Button(self, text="1. Seleccionar Carpeta del Día", command=self.select_folder, bg="#e0e0e0", font=("Arial", 10), width=30, height=2)
         self.select_folder_button.pack(pady=5)
 
-        self.process_button = tk.Button(self, text="2. Procesar Archivos", command=self.process_files, bg="#4CAF50", fg="white", width=25, height=2)
-        self.process_button.pack(pady=5)
+        self.process_button = tk.Button(self, text="2. Procesar y Generar Planilla", command=self.process_files, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), width=30, height=2)
+        self.process_button.pack(pady=10)
 
     def select_folder(self):
-        self.folder_path = filedialog.askdirectory(title="Selecciona la carpeta del día")
+        self.folder_path = filedialog.askdirectory(title="Selecciona la carpeta con los comprobantes y el banco")
         if self.folder_path:
-            messagebox.showinfo("Carpeta Seleccionada", f"Carpeta: {self.folder_path}")
+            messagebox.showinfo("Carpeta Seleccionada", f"Carpeta activa:\n{self.folder_path}")
 
     def process_files(self):
         if not self.folder_path:
@@ -44,11 +46,13 @@ class ComprobanteConciliacionApp(tk.Tk):
             return
 
         bank_file, invoices = self.find_files(self.folder_path)
-        print(f"Archivo banco encontrado: {bank_file}")
-        print(f"Comprobantes encontrados: {len(invoices)}")
 
-        if not bank_file or not invoices:
-            messagebox.showwarning("Atención", "No se encontró el archivo del banco o los comprobantes en la carpeta.")
+        if not bank_file:
+            messagebox.showwarning("Atención", "No se encontró el archivo del banco (.xlsx o .csv) en la carpeta.")
+            return
+        
+        if not invoices:
+            messagebox.showwarning("Atención", "No se encontraron comprobantes (PDF, PNG, JPG) en la carpeta.")
             return
 
         try:
@@ -56,9 +60,9 @@ class ComprobanteConciliacionApp(tk.Tk):
             processed_data = self.process_invoices_strict(invoices, df_bank, cred_col_real, ley_col_real)
             self.save_conciliacion_and_update_bank(processed_data, bank_file, df_bank, cred_col_real, ley_col_real)
 
-            messagebox.showinfo("¡Listo!", "Proceso completado con éxito.")
+            messagebox.showinfo("¡Éxito total!", "El proceso de conciliación finalizó correctamente.\nSe generó la planilla y se actualizó el banco.")
         except Exception as e:
-            messagebox.showerror("Error crítico", str(e))
+            messagebox.showerror("Error crítico en el proceso", str(e))
 
     def find_files(self, folder_path):
         bank_file = None
@@ -101,7 +105,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             cred_col_real = df.columns[-1]
 
         if not ley_col_real:
-            raise ValueError("No se encontró la columna 'Leyenda Adicional1' en el banco.")
+            raise ValueError("No se encontró la columna 'Leyenda Adicional1' en el archivo del banco.")
 
         return df, cred_col_real, ley_col_real
 
@@ -140,6 +144,7 @@ class ComprobanteConciliacionApp(tk.Tk):
                 match_score = process.extractOne(banco_nombre, [comp['text']])[1]
                 monto_coincide = any(abs(m - banco_monto_float) < 1.0 for m in comp['montos'])
                 
+                # Validación estricta: nombre aceptable y monto idéntico en el comprobante
                 if match_score >= 75 and monto_coincide:
                     conciliados.append({
                         'archivo': comp['archivo'],
@@ -163,7 +168,7 @@ class ComprobanteConciliacionApp(tk.Tk):
                 image = Image.open(file_path).convert('RGB')
                 extracted_text = pytesseract.image_to_string(image)
         except Exception as e:
-            print(f"Error OCR: {e}")
+            print(f"Error OCR en {file_path}: {e}")
 
         return re.sub(r'\s+', ' ', extracted_text.strip())
 
@@ -187,6 +192,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         df_faltantes = pd.DataFrame(faltantes_list)
 
+        # Crear Excel consolidado lado a lado (Conciliados vs Faltantes)
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             df_final = pd.DataFrame()
             if not df_conciliados.empty:
@@ -203,6 +209,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
             df_final.to_excel(writer, sheet_name='Conciliacion_y_Faltantes', index=False)
 
+        # Actualizar archivo del banco original removiendo solo los conciliados
         if processed_data['conciliados']:
             for item in processed_data['conciliados']:
                 mask = (df_bank[cred_col] == item['monto']) & (df_bank[ley_col].astype(str) == str(item['cliente']))
