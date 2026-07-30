@@ -6,7 +6,6 @@ from tkinter import filedialog, messagebox
 import pandas as pd
 from PIL import Image
 import pytesseract
-from fuzzywuzzy import fuzz
 from pdf2image import convert_from_path
 
 # Ignorar advertencias menores
@@ -57,7 +56,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         try:
             df_bank, cred_col_real, ley_col_real = self.read_bank_file_full(bank_file)
-            processed_data = self.process_invoices_strict(invoices, df_bank, cred_col_real, ley_col_real)
+            processed_data = self.process_invoices_by_amount(invoices, df_bank, cred_col_real, ley_col_real)
             self.save_conciliacion_and_update_bank(processed_data, bank_file, df_bank, cred_col_real, ley_col_real)
 
             messagebox.showinfo("¡Éxito total!", "El proceso de conciliación finalizó correctamente.\nSe generó la planilla y se actualizó el banco.")
@@ -91,25 +90,22 @@ class ComprobanteConciliacionApp(tk.Tk):
         
         cred_col_real, ley_col_real = None, None
         
-        # Búsqueda flexible de columna de créditos/montos
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
             if any(term in c_low for term in ['credito', 'monto', 'haber', 'importe', 'valor', 'saldo']):
                 cred_col_real = col
                 break
 
-        # Búsqueda flexible de la leyenda o descripción del cliente
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
             if 'leyenda' in c_low or 'adicional' in c_low or 'concepto' in c_low or 'detalle' in c_low or 'descripcion' in c_low:
                 ley_col_real = col
                 break
 
-        # Si no encuentra por nombre, asignamos por posición común en extractos bancarios (ej: Columna D para monto, L para leyenda)
         if not cred_col_real and len(df.columns) > 3:
-            cred_col_real = df.columns[3] # Comúnmente la columna D
+            cred_col_real = df.columns[3]
         if not ley_col_real and len(df.columns) > 11:
-            ley_col_real = df.columns[11] # Comúnmente la columna L (Leyenda Adicional1)
+            ley_col_real = df.columns[11]
         elif not ley_col_real and len(df.columns) > 0:
             ley_col_real = df.columns[-1]
 
@@ -119,7 +115,7 @@ class ComprobanteConciliacionApp(tk.Tk):
 
         return df, cred_col_real, ley_col_real
 
-    def process_invoices_strict(self, invoices, df_bank, cred_col, ley_col):
+    def process_invoices_by_amount(self, invoices, df_bank, cred_col, ley_col):
         conciliados = []
         no_encontrados = []
         
@@ -128,62 +124,48 @@ class ComprobanteConciliacionApp(tk.Tk):
         for invoice in invoices:
             invoice_name = os.path.basename(invoice)
             text = self.extract_text(invoice)
-            text_upper = text.upper()
             
+            # Extraer montos del comprobante de forma robusta
             montos_en_texto = re.findall(r'\b\d{1,3}(?:\.\d{3})*(?:,\d+)?\b|\b\d+(?:,\d+)?\b', text)
             montos_limpios = []
             for m in montos_en_texto:
                 try:
-                    val = float(m.replace('.', '').replace(',', '.'))
-                    if val > 0:
+                    # Limpiar puntos de miles y comas decimales para convertir a float
+                    val_str = m.replace('.', '').replace(',', '.')
+                    val = float(val_str)
+                    if val > 1.0:  # Descartar números muy chicos que sean fechas o índices
                         montos_limpios.append(val)
                 except ValueError:
                     pass
 
             match_encontrado = False
 
+            # Buscar en el banco disponible una fila cuyo monto coincida con el comprobante
             for idx, row in df_bank_work.iterrows():
-                banco_nombre = str(row[ley_col]).strip()
                 banco_monto = row[cred_col]
-                
                 try:
                     banco_monto_float = float(str(banco_monto).replace('.', '').replace(',', '.'))
                 except ValueError:
                     banco_monto_float = 0.0
 
-                monto_coincide = any(abs(m - banco_monto_float) < 1.0 for m in montos_limpios)
-
-                if monto_coincide and banco_nombre and banco_nombre != 'nan':
-                    palabras_cliente = [p for p in re.findall(r'[A-Z0-9]+', banco_nombre.upper()) if len(p) > 3]
-                    
-                    coincidencias_palabras = 0
-                    for palabra in palabras_cliente:
-                        if palabra in text_upper:
-                            coincidencias_palabras += 1
-
-                    nombre_coincide = False
-                    if palabras_cliente and (coincidencias_palabras / len(palabras_cliente) >= 0.4):
-                        nombre_coincide = True
-                    else:
-                        similitud = fuzz.partial_ratio(banco_nombre.upper(), text_upper)
-                        if similitud >= 60:
-                            nombre_coincide = True
-
-                    if nombre_coincide:
-                        conciliados.append({
-                            'archivo': invoice_name,
-                            'cliente': banco_nombre,
-                            'monto': banco_monto,
-                            'fecha': row['Fecha'] if 'Fecha' in df_bank_work.columns else ''
-                        })
-                        df_bank_work = df_bank_work.drop(idx)
-                        match_encontrado = True
-                        break
+                # Si el monto del comprobante coincide con el monto de la transferencia del banco
+                if any(abs(m - banco_monto_float) < 1.0 for m in montos_limpios):
+                    banco_nombre = str(row[ley_col]).strip() if pd.notna(row[ley_col]) else "Sin Nombre"
+                    conciliados.append({
+                        'archivo': invoice_name,
+                        'cliente': banco_nombre,
+                        'monto': banco_monto,
+                        'fecha': row['Fecha'] if 'Fecha' in df_bank_work.columns else ''
+                    })
+                    # Remover esta fila del banco de trabajo para evitar duplicados
+                    df_bank_work = df_bank_work.drop(idx)
+                    match_encontrado = True
+                    break
 
             if not match_encontrado:
                 no_encontrados.append({
                     'archivo_faltante': invoice_name,
-                    'detalle': f"El comprobante {invoice_name} no matcheó con ninguna transferencia del banco."
+                    'detalle': f"El comprobante {invoice_name} no matcheó con ningún monto de la transferencia del banco."
                 })
 
         return {'conciliados': conciliados, 'no_encontrados': no_encontrados, 'banco_restante': df_bank_work}
