@@ -93,11 +93,11 @@ class ComprobanteConciliacionApp(tk.Tk):
         
         for col in df.columns:
             c_low = col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
-            if any(term in c_low for term in ['credito', 'monto', 'haber', 'importe']):
+            if any(term in c_low for term in ['creditos', 'montos', 'haberes', 'importe']):
                 cred_col_real = col
 
         for col in df.columns:
-            if 'leyenda' in col.lower() and 'adicional' in col.lower():
+            if 'leyenda' in col.lower() and 'adicional1' in col.lower():
                 ley_col_real = col
                 break
 
