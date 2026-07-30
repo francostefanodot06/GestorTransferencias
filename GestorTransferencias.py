@@ -9,10 +9,10 @@ import pytesseract
 from fuzzywuzzy import process
 from pdf2image import convert_from_path
 
-# Ignorar advertencias menores de fuzzywuzzy
+# Ignorar advertencias menores
 warnings.filterwarnings('ignore', category=UserWarning)
 
-# Configurar ruta de Tesseract (Ajusta si es necesario)
+# Configurar ruta de Tesseract
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 class ComprobanteConciliacionApp(tk.Tk):
@@ -60,7 +60,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             processed_data = self.process_invoices_strict(invoices, df_bank, cred_col_real, ley_col_real)
             self.save_conciliacion_and_update_bank(processed_data, bank_file, df_bank, cred_col_real, ley_col_real)
 
-            messagebox.showinfo("¡Éxito total!", "El proceso de conciliación finalizó correctamente.\nSe generó la planilla y se actualizó el banco.")
+            messagebox.showinfo("¡Éxito total!", "El proceso de conciliación finalizó correctamente.\nSe generó la planilla limpia y se actualizó el banco.")
         except Exception as e:
             messagebox.showerror("Error crítico en el proceso", str(e))
 
@@ -111,10 +111,17 @@ class ComprobanteConciliacionApp(tk.Tk):
 
     def process_invoices_strict(self, invoices, df_bank, cred_col, ley_col):
         conciliados = []
-        comprobantes_info = []
+        no_encontrados = []
         
+        # Copiamos el banco para ir descontando las filas que sí machean
+        df_bank_work = df_bank.copy()
+        cobradores_lista = df_bank_work[ley_col].dropna().astype(str).tolist()
+
         for invoice in invoices:
+            invoice_name = os.path.basename(invoice)
             text = self.extract_text(invoice)
+            
+            # Extraemos montos del comprobante
             montos_en_texto = re.findall(r'\b\d{1,3}(?:\.\d{3})*(?:,\d+)?\b|\b\d+(?:,\d+)?\b', text)
             montos_limpios = []
             for m in montos_en_texto:
@@ -123,39 +130,45 @@ class ComprobanteConciliacionApp(tk.Tk):
                 except ValueError:
                     pass
 
-            comprobantes_info.append({
-                'archivo': os.path.basename(invoice),
-                'text': text,
-                'montos': montos_limpios
-            })
-
-        banco_pendientes = df_bank.copy()
-        
-        for idx, row in df_bank.iterrows():
-            banco_nombre = str(row[ley_col])
-            banco_monto = row[cred_col]
+            # Buscamos coincidencia de nombre de cliente usando el texto del comprobante contra la lista del banco
+            match_result = process.extractOne(text, cobradores_lista)
             
-            try:
-                banco_monto_float = float(str(banco_monto).replace('.', '').replace(',', '.'))
-            except ValueError:
-                banco_monto_float = 0.0
-
-            for comp in comprobantes_info:
-                match_score = process.extractOne(banco_nombre, [comp['text']])[1]
-                monto_coincide = any(abs(m - banco_monto_float) < 1.0 for m in comp['montos'])
+            match_encontrado = False
+            if match_result and match_result[1] >= 75:
+                cliente_encontrado = match_result[0]
                 
-                # Validación estricta: nombre aceptable y monto idéntico en el comprobante
-                if match_score >= 75 and monto_coincide:
-                    conciliados.append({
-                        'archivo': comp['archivo'],
-                        'cliente': banco_nombre,
-                        'monto': banco_monto,
-                        'fecha': row['Fecha'] if 'Fecha' in df_bank.columns else ''
-                    })
-                    comprobantes_info.remove(comp)
-                    break
+                # Buscamos las filas en el banco de ese cliente
+                matching_rows = df_bank_work.loc[df_bank_work[ley_col].astype(str) == cliente_encontrado]
+                
+                for idx, row in matching_rows.iterrows():
+                    banco_monto = row[cred_col]
+                    try:
+                        banco_monto_float = float(str(banco_monto).replace('.', '').replace(',', '.'))
+                    except ValueError:
+                        banco_monto_float = 0.0
 
-        return {'conciliados': conciliados, 'banco_restante': banco_pendientes}
+                    # Validamos que el monto también coincida con alguno de los montos leídos en el comprobante
+                    if any(abs(m - banco_monto_float) < 1.0 for m in montos_limpios):
+                        conciliados.append({
+                            'archivo': invoice_name,
+                            'cliente': cliente_encontrado,
+                            'monto': banco_monto,
+                            'fecha': row['Fecha'] if 'Fecha' in df_bank_work.columns else ''
+                        })
+                        # Eliminamos esta fila del banco de trabajo para que no se vuelva a usar
+                        df_bank_work = df_bank_work.drop(idx)
+                        cobradores_lista = df_bank_work[ley_col].dropna().astype(str).tolist()
+                        match_encontrado = True
+                        break
+
+            if not match_encontrado:
+                # Si el comprobante físico no encontró su transferencia correspondiente en el banco, va a No Encontrados
+                no_encontrados.append({
+                    'archivo_faltante': invoice_name,
+                    'detalle': f"El comprobante {invoice_name} no matcheó con ninguna transferencia válida del banco."
+                })
+
+        return {'conciliados': conciliados, 'no_encontrados': no_encontrados, 'banco_restante': df_bank_work}
 
     def extract_text(self, file_path):
         extracted_text = ""
@@ -176,51 +189,39 @@ class ComprobanteConciliacionApp(tk.Tk):
         output_excel = os.path.join(self.folder_path, f"Planilla_Conciliacion_{os.path.basename(self.folder_path)}.xlsx")
         
         df_conciliados = pd.DataFrame(processed_data['conciliados'])
-        
-        faltantes_list = []
-        conciliados_clientes = [c['cliente'] for c in processed_data['conciliados']]
-        
-        for idx, row in df_bank.iterrows():
-            cli = str(row[ley_col])
-            monto = row[cred_col]
-            if cli not in conciliados_clientes:
-                faltantes_list.append({
-                    'Faltante_Cliente': cli,
-                    'Faltante_Monto': monto,
-                    'Detalle': f"Faltó: {monto} de {cli}"
-                })
+        df_no_encontrados = pd.DataFrame(processed_data['no_encontrados'])
 
-        df_faltantes = pd.DataFrame(faltantes_list)
-
-        # Crear Excel consolidado lado a lado (Conciliados vs Faltantes)
+        # Guardamos en un Excel prolijo con columnas laterales (Conciliados a la izquierda, No encontrados a la derecha)
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             df_final = pd.DataFrame()
+            
             if not df_conciliados.empty:
                 df_final = pd.concat([df_final, df_conciliados], axis=1)
             else:
-                df_final['Mensaje'] = ['Sin coincidencias']
+                df_final['Mensaje_Conciliados'] = ['No hubo comprobantes conciliados']
 
             df_final['---'] = ''
 
-            if not df_faltantes.empty:
-                df_final = pd.concat([df_final, df_faltantes], axis=1)
+            if not df_no_encontrados.empty:
+                df_final = pd.concat([df_final, df_no_encontrados], axis=1)
             else:
-                df_final['Mensaje_Faltantes'] = ['Sin faltantes']
+                df_final['Mensaje_No_Encontrados'] = ['Todos los comprobantes fueron conciliados']
 
             df_final.to_excel(writer, sheet_name='Conciliacion_y_Faltantes', index=False)
 
-        # Actualizar archivo del banco original removiendo solo los conciliados
+        # Actualizar archivo del banco original removiendo únicamente los ítems que SÍ se conciliaron con comprobante
+        df_banco_original = df_bank.copy()
         if processed_data['conciliados']:
             for item in processed_data['conciliados']:
-                mask = (df_bank[cred_col] == item['monto']) & (df_bank[ley_col].astype(str) == str(item['cliente']))
-                idx_to_drop = df_bank[mask].index
+                mask = (df_banco_original[cred_col] == item['monto']) & (df_banco_original[ley_col].astype(str) == str(item['cliente']))
+                idx_to_drop = df_banco_original[mask].index
                 if not idx_to_drop.empty:
-                    df_bank = df_bank.drop(idx_to_drop[0])
+                    df_banco_original = df_banco_original.drop(idx_to_drop[0])
 
         if bank_file.endswith('.csv'):
-            df_bank.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
+            df_banco_original.to_csv(bank_file, index=False, encoding='utf-8-sig', sep=';')
         else:
-            df_bank.to_excel(bank_file, index=False)
+            df_banco_original.to_excel(bank_file, index=False)
 
 if __name__ == "__main__":
     app = ComprobanteConciliacionApp()
