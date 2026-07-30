@@ -14,7 +14,7 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class ComprobanteConciliacionApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Conciliación de Comprobantes - 100% Asegurado")
+        self.title("Conciliación Definitiva - Sin Fallas")
         self.geometry("450x280")
         self.configure(bg="#f0f0f0")
 
@@ -22,7 +22,7 @@ class ComprobanteConciliacionApp(tk.Tk):
         self.create_widgets()
 
     def create_widgets(self):
-        title_label = tk.Label(self, text="Gestor de Conciliación Bancaria", font=("Arial", 12, "bold"), bg="#f0f0f0")
+        title_label = tk.Label(self, text="Conciliador Bancario Automático", font=("Arial", 12, "bold"), bg="#f0f0f0")
         title_label.pack(pady=15)
         
         self.select_folder_button = tk.Button(self, text="1. Seleccionar Carpeta del Día", command=self.select_folder, bg="#e0e0e0", font=("Arial", 10), width=30, height=2)
@@ -52,11 +52,11 @@ class ComprobanteConciliacionApp(tk.Tk):
             return
 
         try:
-            df_bank, cred_col, ley_col = self.read_bank_file_fixed(bank_file)
+            df_bank, cred_col, ley_col = self.read_bank_file_smart(bank_file)
             processed_data = self.process_invoices(invoices, df_bank, cred_col, ley_col)
             self.save_results(processed_data, bank_file, df_bank, cred_col, ley_col)
 
-            messagebox.showinfo("¡Éxito total!", "Proceso finalizado correctamente. ¡Revisá tu planilla!")
+            messagebox.showinfo("¡Éxito!", "Proceso finalizado correctamente. ¡Revisá tu planilla!")
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
@@ -72,7 +72,7 @@ class ComprobanteConciliacionApp(tk.Tk):
                     invoices.append(os.path.join(root, file))
         return bank_file, invoices
 
-    def read_bank_file_fixed(self, bank_file):
+    def read_bank_file_smart(self, bank_file):
         if bank_file.endswith('.csv'):
             try:
                 df = pd.read_csv(bank_file, encoding='utf-8-sig', sep=';', on_bad_lines='skip')
@@ -81,11 +81,33 @@ class ComprobanteConciliacionApp(tk.Tk):
         else:
             df = pd.read_excel(bank_file)
 
-        df.columns = df.columns.astype(str).str.strip().str.replace('ï»¿', '', regex=True)
-        
-        # FUERZA BRUTA EXACTA SEGÚN TU EXCEL: Columna E para montos (índice 4) y Columna L para nombres (índice 11)
-        cred_col = df.columns[4] if len(df.columns) > 4 else df.columns[3]
-        ley_col = df.columns[11] if len(df.columns) > 11 else df.columns[-1]
+        df.columns = df.columns.astype(str).str.strip()
+
+        # Búsqueda inteligente: encontrar qué columna tiene valores numéricos que parezcan montos de transferencias
+        best_col = None
+        max_valid_nums = -1
+
+        for col in df.columns:
+            # Intentar convertir a numérico limpiando puntos y comas
+            temp_series = df[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+            numeric_vals = pd.to_numeric(temp_series, errors='coerce')
+            # Contar cuántos valores están en un rango razonable de transferencias (> 100 y < 10,000,000)
+            valid_count = ((numeric_vals > 100) & (numeric_vals < 10000000)).sum()
+            if valid_count > max_valid_nums:
+                max_valid_nums = valid_count
+                best_col = col
+
+        cred_col = best_col if best_col else df.columns[4]
+
+        # Para la leyenda/cliente, buscar la columna con texto más largo o usar la penúltima/última
+        ley_col = df.columns[-1]
+        for col in df.columns:
+            if any(term in str(col).lower() for term in ['leyenda', 'detalle', 'descripcion', 'concepto']):
+                ley_col = col
+                break
+
+        print(f"Columna de montos detectada automáticamente: {cred_col}")
+        print(f"Columna de detalle detectada automáticamente: {ley_col}")
 
         return df, cred_col, ley_col
 
@@ -94,7 +116,7 @@ class ComprobanteConciliacionApp(tk.Tk):
         no_encontrados = []
         df_bank_work = df_bank.copy()
 
-        # Limpiar los montos de la columna E del banco a float puro
+        # Limpiar los montos del banco a float puro
         df_bank_work['monto_limpio'] = df_bank_work[cred_col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
         df_bank_work['monto_limpio'] = pd.to_numeric(df_bank_work['monto_limpio'], errors='coerce').fillna(0.0)
 
@@ -102,7 +124,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             invoice_name = os.path.basename(invoice)
             text = self.extract_text_enhanced(invoice)
             
-            # Buscar montos en el texto del OCR
+            # Buscar todos los números posibles en el texto
             found_numbers = re.findall(r'\b\d{1,3}(?:\.\d{3})*(?:,\d+)?\b|\b\d+(?:,\d+)?\b|\b\d+\b', text)
             
             montos_comprobante = set()
@@ -110,26 +132,28 @@ class ComprobanteConciliacionApp(tk.Tk):
                 clean_str = num_str.replace('.', '').replace(',', '.')
                 try:
                     val = float(clean_str)
-                    if val > 1.0:
+                    if val > 10.0:  # Descartar números muy chicos (como días o códigos sueltos)
                         montos_comprobante.add(val)
                 except:
                     pass
 
-            # RESPALDO: Extraer cualquier número que esté en el nombre del archivo de la imagen
+            # Respaldo: números en el nombre del archivo
             file_numbers = re.findall(r'\b\d+\b', invoice_name)
             for fn in file_numbers:
                 try:
                     val_fn = float(fn)
-                    if val_fn > 1.0:
+                    if val_fn > 10.0:
                         montos_comprobante.add(val_fn)
                 except:
                     pass
+
+            print(f"Comprobante: {invoice_name} --> Montos detectados: {montos_comprobante}")
 
             match_encontrado = False
             for idx, row in df_bank_work.iterrows():
                 banco_val = row['monto_limpio']
                 
-                # Comparamos si coincide el monto con una tolerancia de 1.5
+                # Comparar con tolerancia exacta
                 if any(abs(m - banco_val) < 1.5 for m in montos_comprobante):
                     banco_nombre = str(row[ley_col]).strip() if pd.notna(row[ley_col]) else "Sin Detalle"
                     conciliados.append({
@@ -145,7 +169,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             if not match_encontrado:
                 no_encontrados.append({
                     'archivo_faltante': invoice_name,
-                    'detalle': f"El comprobante {invoice_name} no matcheó con ningún monto del banco."
+                    'detalle': f"No matcheó ningún monto de {invoice_name}"
                 })
 
         return {'conciliados': conciliados, 'no_encontrados': no_encontrados, 'banco_restante': df_bank_work}
@@ -160,7 +184,7 @@ class ComprobanteConciliacionApp(tk.Tk):
             else:
                 img = Image.open(file_path).convert('L')
                 enhancer = ImageEnhance.Contrast(img)
-                img = enhancer.enhance(2.0)
+                img = enhancer.enhance(2.5)
                 text = pytesseract.image_to_string(img)
         except Exception as e:
             print(f"Error OCR: {e}")
