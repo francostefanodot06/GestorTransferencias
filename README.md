@@ -1,4 +1,4 @@
-
+ # Actualmente en desarrollo
  # 🧾 Gestor de Transferencias y Comprobantes
 
 Aplicación de Escritorio desarrollada en **Python** con interfaz gráfica (**Tkinter**) diseñada para automatizar la conciliación de comprobantes de pago (imágenes y PDFs) contra extractos bancarios (CSV o XLSX), facilitando el control de rendiciones y el filtrado de transferencias pendientes.
